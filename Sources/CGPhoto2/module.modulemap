@@ -1,0 +1,6 @@
+module CGPhoto2 [system] {
+    header "shim.h"
+    link "gphoto2"
+    link "gphoto2_port"
+    export *
+}

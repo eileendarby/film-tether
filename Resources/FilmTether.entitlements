@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Sandboxing is off: the app needs direct USB device access.
+         USB device claim + sandbox + ICA conflict + IOKit = entitlement hell for a personal-use app. -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+    <!-- Disable Hardened Runtime restrictions that would block libgphoto2's dlopen of camlibs. -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

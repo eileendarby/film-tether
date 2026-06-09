@@ -1,0 +1,11 @@
+.build/
+.swiftpm/
+*.xcodeproj/
+DerivedData/
+*.dSYM/
+.DS_Store
+xcuserdata/
+Package.resolved
+Film Tether.app/
+*.zip
+.compat-libs/
