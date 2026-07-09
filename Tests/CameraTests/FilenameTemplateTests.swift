@@ -34,4 +34,45 @@ final class FilenameTemplateTests: XCTestCase {
             "static.CR2"
         )
     }
+
+    // MARK: - {ext} token + true-extension enforcement
+
+    func testExtTokenResolvesToCameraExtension() {
+        let name = CameraCapture.resolveFilename(
+            pattern: "IMG_{seq}.{ext}", timestamp: Date(), sequence: 3, cameraExtension: "CR3"
+        )
+        XCTAssertEqual(name, "IMG_0003.CR3")
+    }
+
+    func testLiteralExtensionIsCorrectedToCameraExtension() {
+        // Older installs stored a pattern hardcoding ".CR2"; an R5's CR3 must
+        // not be saved under a lying extension.
+        let name = CameraCapture.resolveFilename(
+            pattern: "IMG_{seq}.CR2", timestamp: Date(), sequence: 3, cameraExtension: "CR3"
+        )
+        XCTAssertEqual(name, "IMG_0003.CR3")
+    }
+
+    func testMatchingExtensionIsKept() {
+        let name = CameraCapture.resolveFilename(
+            pattern: "IMG_{seq}.CR2", timestamp: Date(), sequence: 3, cameraExtension: "CR2"
+        )
+        XCTAssertEqual(name, "IMG_0003.CR2")
+    }
+
+    func testMissingExtensionIsAppended() {
+        let name = CameraCapture.resolveFilename(
+            pattern: "IMG_{seq}", timestamp: Date(), sequence: 3, cameraExtension: "JPG"
+        )
+        XCTAssertEqual(name, "IMG_0003.JPG")
+    }
+
+    func testNilCameraExtensionLeavesPatternAlone() {
+        // Settings preview path: no camera file yet, so the literal extension
+        // and the {ext} token both pass through untouched.
+        let name = CameraCapture.resolveFilename(
+            pattern: "IMG_{seq}.{ext}", timestamp: Date(), sequence: 3
+        )
+        XCTAssertEqual(name, "IMG_0003.{ext}")
+    }
 }

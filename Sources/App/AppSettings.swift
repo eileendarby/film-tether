@@ -41,7 +41,12 @@ final class AppSettings: ObservableObject {
         return pics.appendingPathComponent("Film Tether")
     }
 
-    static let defaultFilenamePattern = "IMG_{ymd}_{hms}_{seq}.CR2"
+    /// `{ext}` resolves to the extension of the file the camera actually
+    /// produced (CR2 on a 7D, CR3 on an R5, JPG for JPEG quality). Patterns
+    /// with a hardcoded literal extension (older installs stored ".CR2") get
+    /// the extension corrected at save time too, the name never lies about
+    /// the bytes inside.
+    static let defaultFilenamePattern = "IMG_{ymd}_{hms}_{seq}.{ext}"
 
     /// Default capture key: Space (US keycode 0x31). (Was Return until remapped
     /// so the space bar triggers capture.)
@@ -203,7 +208,16 @@ final class AppSettings: ObservableObject {
     // MARK: - Init
 
     private init() {
-        self.filenamePattern = defaults.string(forKey: Key.filenamePattern) ?? Self.defaultFilenamePattern
+        var storedPattern = defaults.string(forKey: Key.filenamePattern) ?? Self.defaultFilenamePattern
+        // One-time migration: installs that saved the pre-{ext} default keep
+        // its hardcoded ".CR2" in UserDefaults. Save-time extension correction
+        // makes it harmless, but move them to the new default so the Settings
+        // preview reflects reality. Custom patterns are left untouched.
+        if storedPattern == "IMG_{ymd}_{hms}_{seq}.CR2" {
+            storedPattern = Self.defaultFilenamePattern
+            defaults.set(storedPattern, forKey: Key.filenamePattern)
+        }
+        self.filenamePattern = storedPattern
         // One-time hotkey-mapping migration. Existing installs have a stored
         // captureKeyCode (Return) and no zoomUsesShift, so just changing the
         // static defaults wouldn't move them. Bumping the version forces the

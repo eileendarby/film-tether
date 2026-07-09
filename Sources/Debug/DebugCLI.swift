@@ -443,11 +443,11 @@ struct DebugCLI {
             let sess = try await openSession(); defer { sess.close() }
             let props = CameraProperties(session: sess)
             let cap = CameraCapture(session: sess, properties: props)
-            let result = try await cap.capture(to: captureDir, filenamePattern: "DEBUG_{ymd}_{hms}_{seq}.CR2")
+            let result = try await cap.capture(to: captureDir, filenamePattern: "DEBUG_{ymd}_{hms}_{seq}.{ext}")
             let attrs = try FileManager.default.attributesOfItem(atPath: result.path.path)
             let size = (attrs[.size] as? Int) ?? 0
             guard size > 1_000_000 else {
-                throw DebugError("CR2 too small (\(size) bytes)")
+                throw DebugError("RAW too small (\(size) bytes)")
             }
             return "path=\(result.path.lastPathComponent) bytes=\(size) iso=\(result.iso ?? "?") Tv=\(result.shutter ?? "?")"
         })
@@ -534,7 +534,7 @@ struct DebugCLI {
           snapshot                Dump current property snapshot
           widget NAME             Read a raw widget value
           set-widget NAME VALUE   Write a raw widget value
-          capture [DIR]           Fire Immediate release + download CR2
+          capture [DIR]           Fire the shutter + download the RAW (and JPEG, if RAW+JPEG)
           lv-start                Engage live view briefly (sanity check)
           lv-stop                 Disengage live view (mirror down)
           preview [DIR]           Save one LV JPEG (default /tmp) + print its dimensions

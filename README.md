@@ -11,7 +11,7 @@ Open source, MIT, macOS 14+.
 The handful of things that actually matter for the way I use it.
 
 - **Live preview.** Standard tethered live preview, straight from the camera. On my 7D it's a few frames per second. A newer body may be quicker.
-- **RAW capture.** Saves the camera's RAW file (`.CR2`) straight to a folder you pick, untouched. What the camera makes is what you get.
+- **RAW capture.** Saves the camera's RAW file (`.CR2`, `.CR3`, whatever the body produces) straight to a folder you pick, untouched and under its true extension. What the camera makes is what you get; RAW+JPEG saves both files.
 - **Work through a roll.** Tap Space to fire a frame, so working through a roll of negatives is quick.
 - **Exposure controls.** ISO, shutter, aperture, and white-balance Kelvin, all from the Mac. A control greys out when the current mode makes it read-only, so aperture priority just works.
 - **Focus check.** Hold Shift to punch in using the camera's sensor and confirm your focus is sharp.

@@ -585,7 +585,7 @@ final class AppModel: ObservableObject {
 
         if let result = captureResult {
             self.lastCapture = result.path.lastPathComponent
-            self.capturedFiles.append(result.path)
+            self.capturedFiles.append(contentsOf: result.allPaths)
             self.snapshot.iso = result.iso ?? self.snapshot.iso
             self.snapshot.shutter = result.shutter ?? self.snapshot.shutter
             self.snapshot.aperture = result.aperture ?? self.snapshot.aperture

@@ -66,7 +66,7 @@ struct FilmTetherApp: App {
                 Button("Sync Camera Clock to Host") {
                     Task { await model.syncCameraClockLocal() }
                 }
-                .help("Push the host's LOCAL wall time to the camera so saved CR2 EXIF DateTimeOriginal matches what you see in Finder")
+                .help("Push the host's LOCAL wall time to the camera so saved RAW EXIF DateTimeOriginal matches what you see in Finder")
                 Button(model.showMeteringOverlay ? "Hide Zoom-Area Overlay" : "Show Zoom-Area Overlay") {
                     model.showMeteringOverlay.toggle()
                 }
