@@ -55,3 +55,25 @@ dropped files:
 is just how macOS reports a decoded CR3's raw sensor data. Film Tether saves
 the identical bytes, so once the extension is truthful the metadata matches.
 
+## 2026-07-08 — Repair the unit-test suite (pre-existing breakage)
+
+`swift test` failed to compile on the current Swift toolchain, independent of
+the capture fix above (33 errors on the pristine tree): tests call pure
+`static` helpers on `@CameraActor` classes synchronously, which newer Swift
+concurrency checking rejects. Fixed by marking those pure helpers
+`nonisolated` (the project's existing convention, e.g.
+`CameraCapture.resolveFilename`):
+
+- `Sources/Camera/CameraSession.swift` — `parseFirmware(from:)`,
+  `isFirmwareTooOld(_:)`, `knownBuggyFirmwares`.
+- `Sources/Camera/LiveView.swift` — `parseJPEGDimensions(_:)`.
+- `Sources/Camera/LiveZoom.swift` — `meanCenterPixelDifference(baseline:zoomed:)`,
+  `decodeCenterLuminance(_:size:)`.
+- `Tests/CameraTests/ZoomProbeMathTests.swift` —
+  `testJPEGCropDownsizesCenter` asserted the cropped JPEG had fewer *bytes*
+  than the source, which fails on modern ImageIO (fixed header/profile
+  overhead of a 40×40 re-encode exceeds a 983-byte solid-gray source). It now
+  decodes the crop and asserts the 40×40 dimensions directly.
+
+Result: all 34 tests pass.
+

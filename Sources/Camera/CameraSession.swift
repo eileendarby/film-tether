@@ -174,8 +174,9 @@ public final class CameraSession {
     }
 
     /// Parse "Firmware Version: X.Y.Z" out of `gp_camera_get_summary` output.
-    /// Returns nil if not found. Public for testability.
-    public static func parseFirmware(from summary: String) -> String? {
+    /// Returns nil if not found. Public for testability; `nonisolated` because
+    /// it's a pure function (tests call it synchronously off the actor).
+    public nonisolated static func parseFirmware(from summary: String) -> String? {
         // Try several known patterns, libgphoto2 summary format varies across camlibs.
         let patterns = [
             #"Firmware\s+Version[:\s]+([0-9]+(?:\.[0-9]+)+)"#,
@@ -201,11 +202,11 @@ public final class CameraSession {
     /// Currently only the Canon EOS 7D's firmware 2.0.3 is flagged (gphoto2 issue #460:
     /// PTP I/O error on capture-image). Other bodies, including the 70D running its
     /// usual 1.x firmware, pass through fine.
-    public static func isFirmwareTooOld(_ version: String) -> Bool {
+    public nonisolated static func isFirmwareTooOld(_ version: String) -> Bool {
         knownBuggyFirmwares.contains(version)
     }
 
-    private static let knownBuggyFirmwares: Set<String> = [
+    private nonisolated static let knownBuggyFirmwares: Set<String> = [
         "2.0.3", // Canon 7D, see gphoto2 issue #460
     ]
 

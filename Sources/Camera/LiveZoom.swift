@@ -101,8 +101,9 @@ public final class LiveZoom {
     }
 
     /// Mean absolute pixel difference between the 100×100 center crops of two JPEGs,
-    /// computed in grayscale (luminance). Public + static for testability.
-    public static func meanCenterPixelDifference(baseline: Data, zoomed: Data) -> Double {
+    /// computed in grayscale (luminance). Public + static for testability;
+    /// `nonisolated` because it's a pure function.
+    public nonisolated static func meanCenterPixelDifference(baseline: Data, zoomed: Data) -> Double {
         guard let baselineLum = decodeCenterLuminance(baseline, size: 100),
               let zoomedLum = decodeCenterLuminance(zoomed, size: 100),
               baselineLum.count == zoomedLum.count, !baselineLum.isEmpty else {
@@ -115,7 +116,7 @@ public final class LiveZoom {
         return total / Double(baselineLum.count)
     }
 
-    private static func decodeCenterLuminance(_ jpeg: Data, size: Int) -> [UInt8]? {
+    private nonisolated static func decodeCenterLuminance(_ jpeg: Data, size: Int) -> [UInt8]? {
         guard let source = CGImageSourceCreateWithData(jpeg as CFData, nil),
               let img = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
             return nil

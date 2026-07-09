@@ -361,8 +361,9 @@ public final class LiveView {
     }
 
     /// Parse SOF0 (Start of Frame, baseline DCT) marker from a JPEG to extract dimensions.
-    /// Returns (nil, nil) if not found. Public + static for testability.
-    public static func parseJPEGDimensions(_ data: Data) -> (Int?, Int?) {
+    /// Returns (nil, nil) if not found. Public + static for testability;
+    /// `nonisolated` because it's a pure function.
+    public nonisolated static func parseJPEGDimensions(_ data: Data) -> (Int?, Int?) {
         guard data.count >= 4 else { return (nil, nil) }
         // JPEG must start with FF D8.
         guard data[0] == 0xFF, data[1] == 0xD8 else { return (nil, nil) }

@@ -53,10 +53,17 @@ final class ZoomProbeMathTests: XCTestCase {
             XCTFail("crop returned nil")
             return
         }
-        // We can't easily check the dimensions of the cropped JPEG without decoding, but
-        // it should be non-empty and smaller than the source (a 1/5 crop yields a ~40×40 image).
+        // Decode and check dimensions directly: a 1/5 crop of 200×200 is 40×40.
+        // (An earlier byte-size assertion was flaky: a tiny JPEG's fixed
+        // header/profile overhead can exceed a solid-gray source's total size.)
         XCTAssertGreaterThan(cropped.count, 0)
-        XCTAssertLessThan(cropped.count, g.count)
+        guard let source = CGImageSourceCreateWithData(cropped as CFData, nil),
+              let img = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            XCTFail("cropped JPEG failed to decode")
+            return
+        }
+        XCTAssertEqual(img.width, 40)
+        XCTAssertEqual(img.height, 40)
     }
 
     func testJPEGCropDivisor1ReturnsOriginal() {
