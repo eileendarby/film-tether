@@ -18,6 +18,7 @@ struct DebugCLI {
             exit(2)
         }
         CameraEnvironment.setup()
+        installStderrGphotoLog()  // no-op unless EOS_DEBUG=1
         let cmd = args[1]
         let rest = Array(args.dropFirst(2))
         do {
@@ -39,6 +40,9 @@ struct DebugCLI {
         case "set-widget":
             guard rest.count >= 2 else { fail("set-widget needs NAME VALUE") }
             try await runSetWidget(rest[0], rest[1])
+        case "choices":
+            guard let name = rest.first else { fail("choices needs NAME") }
+            try await runChoices(name)
         case "capture":
             let dir = rest.first ?? defaultCaptureDir()
             try await runCapture(toDir: dir)
@@ -113,6 +117,21 @@ struct DebugCLI {
         let sess = try await openSession(); defer { sess.close() }
         try await CameraProperties(session: sess).setString(name, value: value)
         print("set \(name)=\(value)")
+    }
+
+    /// Dump a RADIO/MENU widget's full choice list plus its current value.
+    /// Diagnostic for "why is X missing from a picker": the app's menus show
+    /// exactly these strings, so this reveals what libgphoto2/the body report.
+    @CameraActor
+    static func runChoices(_ name: String) async throws {
+        let sess = try await openSession(); defer { sess.close() }
+        let props = CameraProperties(session: sess)
+        let current = (try? await props.getString(name)) ?? "?"
+        let list = try await props.choices(for: name)
+        print("\(name) current=\(current) (\(list.count) choices)")
+        for (i, c) in list.enumerated() {
+            print(String(format: "  [%2d] %@", i, c))
+        }
     }
 
     @CameraActor
@@ -500,6 +519,18 @@ struct DebugCLI {
         print("end=\(Date())")
     }
 
+    /// With EOS_DEBUG=1, pipe libgphoto2's internal logging straight to stderr.
+    /// The GUI app bridges to unified logging instead (CameraLog); for a
+    /// headless CLI, stderr is greppable and needs no `log show`.
+    static func installStderrGphotoLog() {
+        guard ProcessInfo.processInfo.environment["EOS_DEBUG"] == "1" else { return }
+        gp_log_add_func(GP_LOG_DEBUG, { _, domain, message, _ in
+            let d = domain.map { String(cString: $0) } ?? "?"
+            let m = message.map { String(cString: $0) } ?? "?"
+            FileHandle.standardError.write(Data("gp[\(d)] \(m)\n".utf8))
+        }, nil)
+    }
+
     @CameraActor
     static func openSession() async throws -> CameraSession {
         let sess = try CameraSession()
@@ -534,6 +565,7 @@ struct DebugCLI {
           snapshot                Dump current property snapshot
           widget NAME             Read a raw widget value
           set-widget NAME VALUE   Write a raw widget value
+          choices NAME            List a RADIO/MENU widget's choices + current value
           capture [DIR]           Fire the shutter + download the RAW (and JPEG, if RAW+JPEG)
           lv-start                Engage live view briefly (sanity check)
           lv-stop                 Disengage live view (mirror down)

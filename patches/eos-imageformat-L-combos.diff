@@ -1,0 +1,45 @@
+libgphoto2: fix "RAW + L" / "cRAW + L" collapsing to "RAW" / "cRAW" on
+Canon bodies with the user/custom JPEG compression scheme (e.g. EOS R5)
+
+ptp_unpack_EOS_ImageFormat condenses the camera's EOS ImageFormat records
+(1 or 2 entries of type/size/compression) into one u16 so the existing
+enum/look-up machinery can be reused. It marked "no second entry" by
+sniffing s2 == 0 && c2 == 0 — but on bodies using the user/custom JPEG
+compression scheme (compression code 0, e.g. the R5), the large JPEG "L"
+is exactly size 0 + compression 0. A real "RAW + L" second entry was
+therefore indistinguishable from an absent one and unpacked to plain
+"RAW" (0x0cff instead of 0x0c00).
+
+Observed on an EOS R5 (fw 2.x): the imageformat propdesc enumerates 14
+values, of which the two "+ L" combos arrived as duplicates of plain
+RAW/cRAW, so "RAW + L" and "cRAW + L" were missing from the choice list
+and the current value read back as "RAW" whenever the body was set to
+RAW+L. Setting the combos already worked (ptp_pack_EOS_ImageFormat
+handles low byte 0x00 correctly); only the unpack side was lossy.
+
+Fix: decide "second entry absent" from n, the entry count the camera
+itself reports (and treat a second entry with an invalid type the same
+way), instead of sniffing zero values.
+
+Verified against a real EOS R5: all 14 choices decode (including
+"RAW + L" and "cRAW + L") and each round-trips through set + readback.
+
+Applies to libgphoto2 2.5.34; the same code is present on master as of
+2026-07-09.
+
+--- a/camlibs/ptp2/ptp-pack.c	2026-05-30 03:21:41
++++ b/camlibs/ptp2/ptp-pack.c	2026-07-09 20:43:59
+@@ -1578,7 +1578,12 @@
+ 	c1 |= (t1 == 6) ? 8 : 0;
+ 	c2 |= (t2 == 6) ? 8 : 0;
+ 
+-	if (s2 == 0 && c2 == 0)
++	/* Mark an absent second entry. Do NOT infer absence from s2/c2 both
++	   being zero: on bodies using the user/custom JPEG compression scheme
++	   (e.g. EOS R5), "L" is size 0 + compression 0, so a real "RAW + L"
++	   second entry would collapse into plain "RAW". n is the entry count
++	   the camera itself reported. */
++	if (n == 1 || (t2 != 1 && t2 != 6))
+ 		s2 = c2 = 0xF;
+ 
+ 	return ((s1 & 0xF) << 12) | ((c1 & 0xF) << 8) | ((s2 & 0xF) << 4) | ((c2 & 0xF) << 0);

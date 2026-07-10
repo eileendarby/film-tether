@@ -9,3 +9,5 @@ Package.resolved
 Film Tether.app/
 *.zip
 .compat-libs/
+.camlib-build/
+vendor/

@@ -1,4 +1,4 @@
-.PHONY: build bundle run run-debug clean tests check format help doctor dist dist-compat dist-universal debug debug-test
+.PHONY: build bundle run run-debug clean tests check format help doctor dist dist-compat dist-universal debug debug-test patched-camlib
 
 APP_NAME       := FilmTether
 # Display-friendly bundle filename — macOS supports spaces in .app paths,
@@ -17,6 +17,13 @@ BREW_PREFIX   := $(shell brew --prefix 2>/dev/null || echo /opt/homebrew)
 export PKG_CONFIG_PATH := $(BREW_PREFIX)/lib/pkgconfig:$(PKG_CONFIG_PATH)
 export PATH := $(BREW_PREFIX)/bin:$(PATH)
 
+# Repo-local patched ptp2 camlib (built by `make patched-camlib`, see
+# patches/eos-imageformat-L-combos.diff), used only when it matches the
+# installed brew libgphoto2 version. bundle.sh does its own equivalent check;
+# this one routes the headless debug CLI through the same patched camlib.
+GP_VERSION      := $(shell basename "$$(find "$$(brew --prefix libgphoto2 2>/dev/null)/lib/libgphoto2" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)" 2>/dev/null)
+PATCHED_CAMLIBS := $(if $(wildcard vendor/camlibs/$(GP_VERSION)/ptp2.so),$(CURDIR)/vendor/camlibs/$(GP_VERSION))
+
 help:
 	@echo "Film Tether build"
 	@echo ""
@@ -28,6 +35,7 @@ help:
 	@echo "  make dist     Build + bundle + zip for friend-handoff (no brew needed on their Mac)"
 	@echo "  make debug-test  Run the headless autonomous test suite against the 7D"
 	@echo "  make debug CMD=\"…\"  Run a single CLI subcommand (snapshot, capture, meter, …)"
+	@echo "  make patched-camlib  Build the patched ptp2.so (EOS R5 'RAW + L' Format fix)"
 	@echo "  make clean    Remove .build/ and $(BUNDLE)"
 	@echo "  make check    Static checks (swift package describe + plist lint)"
 	@echo ""
@@ -50,7 +58,7 @@ debug-test: build
 		echo "Film Tether GUI is running — quit it first (USB is single-claim)"; \
 		exit 1; \
 	fi
-	@$(DEBUG_BIN) test
+	@$(if $(PATCHED_CAMLIBS),CAMLIBS="$(PATCHED_CAMLIBS)") $(DEBUG_BIN) test
 
 # Run a single CLI subcommand without launching the GUI. Examples:
 #   make debug CMD="snapshot"
@@ -62,7 +70,7 @@ debug: build
 		echo "Film Tether GUI is running — quit it first (USB is single-claim)"; \
 		exit 1; \
 	fi
-	@$(DEBUG_BIN) $(CMD)
+	@$(if $(PATCHED_CAMLIBS),CAMLIBS="$(PATCHED_CAMLIBS)") $(DEBUG_BIN) $(CMD)
 
 bundle: build
 	@bash scripts/bundle.sh "$(BUNDLE)" "$(APP_NAME)" "$(BINARY)"
@@ -80,6 +88,14 @@ run-debug: bundle
 	@echo ""
 	@echo "Stream the app's logs (run in another terminal):"
 	@echo "  log stream --predicate 'subsystem == \"co.wonders.filmtether\"' --info --debug"
+
+# Build the patched ptp2 camlib: fixes "RAW + L"/"cRAW + L" missing from the
+# Format menu on the EOS R5 (libgphoto2 decode bug; patch + details in
+# patches/eos-imageformat-L-combos.diff). Output lands in vendor/camlibs/ and
+# is picked up automatically by bundle/run/dist and the debug targets.
+# Re-run after a `brew upgrade libgphoto2`.
+patched-camlib:
+	@bash scripts/build-patched-camlib.sh
 
 clean:
 	@rm -rf .build "$(BUNDLE)"

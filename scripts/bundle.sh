@@ -135,6 +135,15 @@ CAMLIBS_WANTED="${CAMLIBS:-ptp2}"
 echo ">> Vendoring camlibs: $CAMLIBS_WANTED"
 for cam in $CAMLIBS_WANTED; do
     src="$LIBGPHOTO2_PREFIX/lib/libgphoto2/$LIBGPHOTO2_VERSION/$cam.so"
+    # Prefer a repo-local patched camlib (built by scripts/build-patched-camlib.sh,
+    # e.g. the EOS "RAW + L" ImageFormat decode fix) when its libgphoto2 version
+    # matches the one being vendored. Native builds only: compat/universal
+    # builds target other OS/arch bottles the local build doesn't match.
+    patched="vendor/camlibs/$LIBGPHOTO2_VERSION/$cam.so"
+    if [[ -z "${COMPAT_STAGE:-}" && -f "$patched" ]]; then
+        echo "   using patched $cam.so from $patched"
+        src="$patched"
+    fi
     if [[ -f "$src" ]]; then
         cp "$src" "$BUNDLE/Contents/Resources/camlibs/"
     else

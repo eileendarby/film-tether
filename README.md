@@ -63,6 +63,13 @@ make doctor          # diagnostics if something looks off
 
 The `make dist` zip vendors libgphoto2, so it runs on a Mac without Homebrew.
 
+One optional extra: `make patched-camlib` builds libgphoto2's PTP driver with a
+small fix (kept in `patches/`) for a decode bug that hides the "RAW + L" and
+"cRAW + L" quality choices on newer EOS bodies like the R5. Once built, every
+`make run`/`make dist` uses it automatically; without it the app still works,
+those two Format-menu entries are just missing. Re-run it after
+`brew upgrade libgphoto2`.
+
 ### If it won't connect
 
 Usually libgphoto2 wins the USB claim and Film Tether connects on the first try. When it doesn't, it's almost always another app already holding the camera. For me that's Preview, which I tend to leave open (Image Capture and Photos can grab it too). Close it and relaunch Film Tether.

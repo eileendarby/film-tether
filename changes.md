@@ -2,6 +2,50 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-07-09 — Restore "RAW + L" / "cRAW + L" to the Format menu (libgphoto2 patch)
+
+**Problem:** On the R5, the Format menu offered every quality combo except
+`RAW + L` and `cRAW + L`. The app shows exactly what libgphoto2's
+`imageformat` widget reports, so the entries were missing at the driver
+level, not in the app.
+
+**Root cause (found against the live camera):** the R5 reports 14 supported
+values for the EOS ImageFormat PTP property. libgphoto2's
+`ptp_unpack_EOS_ImageFormat` condenses each value's 1–2 records
+(type/size/compression) into a u16, and marks "no second record" by checking
+`size == 0 && compression == 0`. On bodies using the user/custom JPEG
+compression scheme (the R5 among them), large JPEG "L" is *exactly* size 0 +
+compression 0 — so real `RAW + L` / `cRAW + L` entries collapsed into plain
+`RAW`/`cRAW` duplicates and vanished from the choice list. The same bug made
+the current value read back as "RAW" whenever the body was set to RAW+L
+(setting the combo already worked; only the decode was lossy). Bug confirmed
+present in libgphoto2 2.5.34 and on master as of this date.
+
+**Fix:** one-line patch to `ptp_unpack_EOS_ImageFormat` — decide "second
+record absent" from the record count the camera itself reports instead of
+sniffing zero values. Verified on the R5: all 14 choices decode (including
+both `+ L` combos) and each round-trips through set + readback. Worth
+submitting upstream to gphoto/libgphoto2.
+
+**Changes:**
+
+- `patches/eos-imageformat-L-combos.diff` — the libgphoto2 patch, with a
+  full explanation in its header.
+- `scripts/build-patched-camlib.sh` — downloads the libgphoto2 source
+  matching the installed brew version, applies the patch, builds just the
+  ptp2 camlib, relinks it against brew's dylibs, and installs it at
+  `vendor/camlibs/<version>/ptp2.so` (gitignored build artifact).
+- `Makefile` — new `make patched-camlib` target; `make debug`/`debug-test`
+  route the headless CLI through the patched camlib when present (via the
+  `CAMLIBS` env var libgphoto2 honors).
+- `scripts/bundle.sh` — prefers `vendor/camlibs/<version>/ptp2.so` over the
+  stock brew camlib when the versions match. Native builds only;
+  compat/universal builds keep the stock bottle camlibs (different OS/arch).
+  A brew upgrade to a new libgphoto2 version silently falls back to stock
+  (menu loses the two combos again) until the script is re-run.
+- `.gitignore` — added `vendor/` and `.camlib-build/`.
+- `README.md` — documented `make patched-camlib`.
+
 ## 2026-07-09 — Always save extensions uppercase
 
 Saved filenames now always get an UPPERCASE extension (`.CR3`, `.JPG`),
@@ -13,6 +57,22 @@ regardless of the case the camera's filename or the user's pattern used.
   `.cr3` in a pattern is also normalized.
 - `Tests/CameraTests/FilenameTemplateTests.swift` — two new tests
   (lowercase camera extension, lowercase literal pattern extension).
+
+## 2026-07-09 — Debug CLI: `choices` command + stderr libgphoto2 logging
+
+Diagnostics added while chasing the Format-menu bug:
+
+- `Sources/Debug/DebugCLI.swift` — new `choices NAME` subcommand dumps a
+  RADIO/MENU widget's full choice list plus current value (the app's pickers
+  show exactly these strings). With `EOS_DEBUG=1` the CLI now pipes
+  libgphoto2's internal logging to stderr (the GUI app bridges to unified
+  logging instead; a headless CLI wants greppable stderr).
+
+**Note:** Homebrew's libgphoto2 is built with `--disable-debug`, which
+compiles libgphoto2's internal logging out entirely — so `EOS_DEBUG=1` shows
+libgphoto2 messages only from the port/core layers, not the ptp2 camlib, and
+the same applies to the GUI's `make run-debug` bridge. Diagnosing the decode
+bug required a local from-source build with logging enabled.
 
 ## 2026-07-08 — Save captures under the camera's true file type (Canon R5 CR3 fix)
 
