@@ -2,6 +2,18 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-07-09 — Always save extensions uppercase
+
+Saved filenames now always get an UPPERCASE extension (`.CR3`, `.JPG`),
+regardless of the case the camera's filename or the user's pattern used.
+
+- `Sources/Camera/CameraCapture.swift` — `resolveFilename` uppercases
+  `cameraExtension` on entry, and the save-time extension correction now
+  compares exactly (not case-insensitively) so a lowercase literal like
+  `.cr3` in a pattern is also normalized.
+- `Tests/CameraTests/FilenameTemplateTests.swift` — two new tests
+  (lowercase camera extension, lowercase literal pattern extension).
+
 ## 2026-07-08 — Save captures under the camera's true file type (Canon R5 CR3 fix)
 
 **Problem:** On a Canon R5, captured files arrived named `.CR2` but Finder

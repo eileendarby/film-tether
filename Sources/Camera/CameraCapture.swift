@@ -240,11 +240,14 @@ public final class CameraCapture {
     /// produced (e.g. "CR2", "CR3", "JPG"). When provided, it fills `{ext}`
     /// AND overrides any literal extension in the pattern; the saved name must
     /// never lie about the bytes inside (a pattern hardcoding ".CR2" used to
-    /// mislabel R5 CR3/JPEG files). When nil (tests, Settings preview), tokens
-    /// resolve but the pattern's literal extension is left alone.
+    /// mislabel R5 CR3/JPEG files). Saved extensions are always uppercase,
+    /// regardless of the case the camera or the pattern used. When nil (tests,
+    /// Settings preview), tokens resolve but the pattern's literal extension
+    /// is left alone.
     public nonisolated static func resolveFilename(
         pattern: String, timestamp: Date, sequence: Int, cameraExtension: String? = nil
     ) -> String {
+        let cameraExtension = cameraExtension?.uppercased()
         let cal = Calendar(identifier: .gregorian)
         let comps = cal.dateComponents([.year, .month, .day, .hour, .minute, .second], from: timestamp)
         let ymd = String(format: "%04d%02d%02d", comps.year ?? 1970, comps.month ?? 1, comps.day ?? 1)
@@ -260,9 +263,11 @@ public final class CameraCapture {
         var name = sanitizeFilename(resolved)
         // Force the true extension when we know it. Patterns from older
         // installs end in a literal ".CR2"; swap it rather than trusting it.
+        // Exact comparison (not case-insensitive) so a lowercase ".cr3" in a
+        // pattern is also normalized to the uppercase form.
         if let ext = cameraExtension, !ext.isEmpty {
             let ns = name as NSString
-            if ns.pathExtension.caseInsensitiveCompare(ext) != .orderedSame {
+            if ns.pathExtension != ext {
                 name = ns.deletingPathExtension + ".\(ext)"
             }
         }

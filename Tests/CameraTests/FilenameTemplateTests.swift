@@ -67,6 +67,23 @@ final class FilenameTemplateTests: XCTestCase {
         XCTAssertEqual(name, "IMG_0003.JPG")
     }
 
+    func testLowercaseCameraExtensionIsUppercased() {
+        // Extensions are always saved uppercase, even if the camera reports
+        // a lowercase filename.
+        let name = CameraCapture.resolveFilename(
+            pattern: "IMG_{seq}.{ext}", timestamp: Date(), sequence: 3, cameraExtension: "cr3"
+        )
+        XCTAssertEqual(name, "IMG_0003.CR3")
+    }
+
+    func testLowercaseLiteralExtensionIsUppercased() {
+        // A pattern's literal lowercase extension is normalized too.
+        let name = CameraCapture.resolveFilename(
+            pattern: "IMG_{seq}.cr2", timestamp: Date(), sequence: 3, cameraExtension: "CR2"
+        )
+        XCTAssertEqual(name, "IMG_0003.CR2")
+    }
+
     func testNilCameraExtensionLeavesPatternAlone() {
         // Settings preview path: no camera file yet, so the literal extension
         // and the {ext} token both pass through untouched.
