@@ -2,6 +2,40 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-07-28 — Verified "Sync Camera Clock to Host" on the Canon R5
+
+No behaviour change — this entry records a hardware verification, because the
+clock-sync code was written entirely against the 7D and had never been tested
+on the R5.
+
+**Result: it works unmodified.** A clock deliberately skewed by an hour was
+corrected to within a second, and EXIF `DateTimeOriginal` on the resulting CR3
+matched host wall clock (`-07:00`, Los Angeles, DST on). The 7D-era
+`cameraTZOffsetMinutes` workaround is *not* needed on this body; leave it at 0.
+
+**What the R5 actually exposes**, versus the 7D's single `datetimeutc`:
+
+| leaf | type | R5 behaviour |
+| --- | --- | --- |
+| `settings/datetime` | DATE | camera **local** clock; reads fine, **writes silently ignored** |
+| `settings/datetimeutc` | DATE | camera **UTC** clock; reads and writes both work |
+| `actions/syncdatetime` | TOGGLE | present |
+| `actions/syncdatetimeutc` | TOGGLE | present |
+
+Two things worth carrying forward:
+
+- `settings/datetime` advertises `Readonly: 0` and accepts a write with no
+  error, then leaves the value untouched. `syncDateTimeToHostLocal` writes
+  `datetimeutc`, which is the one that takes — so this is a trap for a future
+  "simplification", not a live bug. Noted in the function's doc comment.
+- The read path in `snapshot()` reads `datetime`, and a prior worry was that it
+  might come back nil on the R5 the way it does on a 7D. It doesn't: the leaf
+  exists and reports correctly, so the footer clock and its drift indicator
+  work on this body.
+
+- `Sources/Camera/CameraProperties.swift` — documented the R5 findings on
+  `syncDateTimeToHostLocal`. Comment only.
+
 ## 2026-07-28 — Preview zoom as percentages, with a Fit mode (and a layout fix)
 
 **The bug first:** rotating the preview pushed the exposure toolbar and status

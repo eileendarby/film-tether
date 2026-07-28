@@ -475,6 +475,19 @@ public final class CameraProperties {
     /// so the previous "write local-clock-as-pseudo-UTC" trick silently fell
     /// back to vanilla syncdatetimeutc, leaving the drift in place.
     ///
+    /// **Verified on the R5 (2026-07-28).** That body exposes all four leaves —
+    /// `settings/datetime`, `settings/datetimeutc`, `actions/syncdatetime`,
+    /// `actions/syncdatetimeutc` — and this function works there unmodified:
+    /// a clock skewed by an hour was corrected to within a second, and EXIF
+    /// DateTimeOriginal on the resulting CR3 matched host wall clock with a
+    /// correct -07:00 / Los Angeles / DST-on zone. `tzOffsetMinutes` is NOT
+    /// needed on the R5; leave it at 0.
+    ///
+    /// One R5 trap worth knowing: `settings/datetime` advertises `Readonly: 0`
+    /// but **silently ignores writes** — no error, value simply unchanged.
+    /// `settings/datetimeutc` is the one that actually takes, which is what we
+    /// write below. Don't "simplify" this to write `datetime`.
+    ///
     /// Workaround: pass `tzOffsetMinutes` matching the camera's TZ-menu
     /// delta from host. Camera on PST (-8), host on PDT (-7) → pass +60. The
     /// write becomes `datetimeutc = host_utc + 60min`, the camera computes
