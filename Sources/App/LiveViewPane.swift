@@ -17,11 +17,12 @@ struct LiveViewPane: View {
 
     var body: some View {
         ZStack {
-            // 3:2 aspect-ratio constraint so the pane letterboxes inside the
-            // available space instead of cropping.
+            // Aspect-ratio constraint so the pane letterboxes inside the
+            // available space instead of cropping. 3:2 normally, 2:3 when the
+            // preview is rotated a quarter turn.
             ImagePaneRepresentable()
-                .aspectRatio(3.0 / 2.0, contentMode: .fit)
-            // Interaction layer ONLY, same 3:2 rect as the image. The visible
+                .aspectRatio(model.previewAspectRatio, contentMode: .fit)
+            // Interaction layer ONLY, same rect as the image. The visible
             // box is composited into the frame (AppModel.drawZoomBox), always
             // shown while the overlay toggle is on (no fade). Click OR drag
             // anywhere to zip the box (zoom target), centered, to that point.
@@ -33,17 +34,24 @@ struct LiveViewPane: View {
                             DragGesture(minimumDistance: 0)   // 0 → a plain click also fires this
                                 .onChanged { value in
                                     let f = AppModel.zoomBoxFraction
-                                    let cx = value.location.x / max(geo.size.width, 1)
-                                    let cy = value.location.y / max(geo.size.height, 1)
+                                    // The gesture reports a point in the ROTATED
+                                    // view; meteringCenter is sensor space, so
+                                    // un-rotate before clamping (clamping in the
+                                    // wrong space would pin the wrong edges).
+                                    let display = CGPoint(
+                                        x: value.location.x / max(geo.size.width, 1),
+                                        y: value.location.y / max(geo.size.height, 1)
+                                    )
+                                    let s = model.previewRotation.sensorPoint(fromDisplay: display)
                                     // Box centered on the click/drag point, clamped so it
                                     // stays fully in frame and can reach every edge.
-                                    let nx = min(max(cx, f/2), 1 - f/2)
-                                    let ny = min(max(cy, f/2), 1 - f/2)
+                                    let nx = min(max(s.x, f/2), 1 - f/2)
+                                    let ny = min(max(s.y, f/2), 1 - f/2)
                                     model.meteringCenter = CGPoint(x: nx, y: ny)
                                 }
                         )
                 }
-                .aspectRatio(3.0 / 2.0, contentMode: .fit)
+                .aspectRatio(model.previewAspectRatio, contentMode: .fit)
             }
         }
     }
@@ -56,7 +64,7 @@ private struct ImagePaneRepresentable: NSViewRepresentable {
         let pane = ImagePane()
         // scaleProportionallyUpOrDown = always scale to fit, preserve aspect,
         // never crop. Belt-and-suspenders: SwiftUI also gets an
-        // aspectRatio(3/2) constraint in LiveViewPane.body so the pane
+        // aspectRatio constraint in LiveViewPane.body so the pane
         // itself is letterboxed inside the available space rather than
         // sized to whatever the parent provides. Together: never crop.
         pane.imageScaling = .scaleProportionallyUpOrDown
@@ -74,5 +82,3 @@ private struct ImagePaneRepresentable: NSViewRepresentable {
         override var acceptsFirstResponder: Bool { true }
     }
 }
-
-

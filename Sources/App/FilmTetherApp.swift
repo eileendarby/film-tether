@@ -71,6 +71,16 @@ struct FilmTetherApp: App {
                     model.showMeteringOverlay.toggle()
                 }
                 .help("Toggle the rectangle showing where Shift-zoom will punch into. (Cmd-H removed because it conflicts with macOS's Hide Window.)")
+                Button("Rotate Preview Right (now \(model.previewRotation.displayName))") {
+                    model.rotatePreviewRight()
+                }
+                .keyboardShortcut("r", modifiers: [.command])
+                .help("Turn the live preview 90° clockwise. Cmd-R. Display only, and remembered across launches — the camera and the saved files are never rotated.")
+                Button("Rotate Preview Left") {
+                    model.rotatePreviewLeft()
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .help("Turn the live preview 90° counter-clockwise. Cmd-Shift-R.")
                 Button(model.focusPeakingEnabled ? "Disable Focus Peaking" : "Enable Focus Peaking") {
                     model.focusPeakingEnabled.toggle()
                 }

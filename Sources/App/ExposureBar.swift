@@ -1,5 +1,6 @@
 import SwiftUI
 import Camera
+import Scan
 
 struct ExposureBar: View {
     @EnvironmentObject var model: AppModel
@@ -32,10 +33,31 @@ struct ExposureBar: View {
             Divider().frame(height: 28)
             captureButton()
             liveViewToggle()
+            rotateButton()
             peakingToggleButton()
             boxToggleButton()
             zoomToggleButton()
         }
+    }
+
+    /// Click rotates the preview a quarter turn clockwise; the label doubles as
+    /// the current-rotation readout. Counter-clockwise lives on Cmd-Shift-R —
+    /// the toolbar is already near the window's minimum width, so a second
+    /// button isn't worth the pixels.
+    @ViewBuilder
+    private func rotateButton() -> some View {
+        Button {
+            model.rotatePreviewRight()
+        } label: {
+            Label(model.previewRotation.displayName, systemImage: "rotate.right")
+                .labelStyle(.titleAndIcon)
+                // Fixed width so the neighbouring buttons don't shuffle as the
+                // angle changes, sized for the widest label: "270°" measures
+                // 29pt at the 13pt system font, plus a 15pt icon and ~5pt of
+                // Label spacing ≈ 49pt. The rest is slack.
+                .frame(width: 56, alignment: .leading)
+        }
+        .help("Rotate the live preview 90° clockwise (Cmd-R; Cmd-Shift-R goes counter-clockwise). Display only — the camera and the saved files are untouched.")
     }
 
     @ViewBuilder

@@ -8,6 +8,7 @@ let package = Package(
         .executable(name: "FilmTether", targets: ["App"]),
         .library(name: "Camera", targets: ["Camera"]),
         .library(name: "Hotkey", targets: ["Hotkey"]),
+        .library(name: "Scan", targets: ["Scan"]),
     ],
     targets: [
         .systemLibrary(
@@ -43,9 +44,19 @@ let package = Package(
             dependencies: [],
             path: "Sources/Hotkey"
         ),
+        // Film-scanning domain model: preview rotation, crop geometry, film
+        // negative sizes, and (later) the sidecar / REST payloads. Deliberately
+        // free of libgphoto2 and SwiftUI so it stays unit-testable — AppModel is
+        // @MainActor and window-server-bound, so none of this logic can be
+        // tested if it lives there.
+        .target(
+            name: "Scan",
+            dependencies: [],
+            path: "Sources/Scan"
+        ),
         .executableTarget(
             name: "App",
-            dependencies: ["Camera", "Hotkey"],
+            dependencies: ["Camera", "Hotkey", "Scan"],
             path: "Sources/App",
             swiftSettings: [
                 .unsafeFlags(["-parse-as-library"]),
@@ -68,6 +79,11 @@ let package = Package(
             name: "CameraTests",
             dependencies: ["Camera"],
             path: "Tests/CameraTests"
+        ),
+        .testTarget(
+            name: "ScanTests",
+            dependencies: ["Scan"],
+            path: "Tests/ScanTests"
         ),
     ]
 )

@@ -4,6 +4,7 @@ import AppKit
 import os
 import Camera
 import Hotkey
+import Scan
 
 private let appLog = Logger(subsystem: "co.wonders.filmtether", category: "AppModel")
 private let hotkeyLog = Logger(subsystem: "co.wonders.filmtether", category: "Hotkey")
@@ -130,6 +131,34 @@ final class AppModel: ObservableObject {
             AppSettings.shared.focusPeakingMode = newValue
             objectWillChange.send()
         }
+    }
+
+    /// Quarter-turn rotation of the live preview, proxied to AppSettings so it
+    /// survives relaunches. Display-only: the camera is never told about it and
+    /// captured files keep the body's native orientation. See `PreviewRotation`
+    /// for why every other coordinate in this class stays in sensor space.
+    var previewRotation: PreviewRotation {
+        get { AppSettings.shared.previewRotation }
+        set {
+            AppSettings.shared.previewRotation = newValue
+            objectWillChange.send()
+        }
+    }
+
+    /// Aspect ratio the preview pane should letterbox to. The body streams 3:2
+    /// at every zoom level, so only rotation can change this.
+    var previewAspectRatio: CGFloat {
+        previewRotation.displayAspect(sensorAspect: 3.0 / 2.0)
+    }
+
+    func rotatePreviewRight() {
+        previewRotation = previewRotation.rotatedRight
+        appLog.info("preview rotation → \(self.previewRotation.rawValue, privacy: .public)°")
+    }
+
+    func rotatePreviewLeft() {
+        previewRotation = previewRotation.rotatedLeft
+        appLog.info("preview rotation → \(self.previewRotation.rawValue, privacy: .public)°")
     }
 
     /// Cycle to the next peaking color. Wraps around after the last.
@@ -501,12 +530,15 @@ final class AppModel: ObservableObject {
         // a floating overlay with its own geometry could, and since the zoom
         // maps from this same image space, the box and the zoomed region are
         // the same thing by construction. Drawn only at fit + while hovering.
+        var composed = base
         if let base, showMeteringOverlay, zoomMode == .fit {
-            self.latestFrame = Self.drawZoomBox(on: base, center: meteringCenter,
-                                                fraction: AppModel.zoomBoxFraction)
-        } else {
-            self.latestFrame = base
+            composed = Self.drawZoomBox(on: base, center: meteringCenter,
+                                        fraction: AppModel.zoomBoxFraction)
         }
+        // Rotation is deliberately the LAST step: every overlay above was
+        // positioned in sensor space, so turning the finished frame keeps the
+        // box glued to the image content instead of sliding off it.
+        self.latestFrame = composed.map { previewRotation.rotate($0) }
     }
 
     /// Composite the zoom-target rectangle onto a copy of the frame in image
@@ -1115,13 +1147,20 @@ final class AppModel: ObservableObject {
         let f = AppModel.zoomBoxFraction
         let step = f                 // one box-width per press
         let lo = f / 2, hi = 1 - f / 2   // keep the box fully inside the frame
-        var c = meteringCenter
+        // The arrow the user pressed is a direction on SCREEN; meteringCenter
+        // lives in sensor space. Map through the rotation so pressing Up always
+        // moves the box up in the preview, whichever way the frame is turned.
+        let screenDelta: CGVector
         switch direction {
-        case .up:    c.y = max(lo, c.y - step)
-        case .down:  c.y = min(hi, c.y + step)
-        case .left:  c.x = max(lo, c.x - step)
-        case .right: c.x = min(hi, c.x + step)
+        case .up:    screenDelta = CGVector(dx: 0, dy: -step)
+        case .down:  screenDelta = CGVector(dx: 0, dy: step)
+        case .left:  screenDelta = CGVector(dx: -step, dy: 0)
+        case .right: screenDelta = CGVector(dx: step, dy: 0)
         }
+        let d = previewRotation.sensorDelta(fromDisplay: screenDelta)
+        var c = meteringCenter
+        c.x = min(max(c.x + d.dx, lo), hi)
+        c.y = min(max(c.y + d.dy, lo), hi)
         meteringCenter = c
         // If the real sensor zoom is engaged, move the punch-in to the new
         // spot too (arrows nudge the live magnified region, like EOS Utility).

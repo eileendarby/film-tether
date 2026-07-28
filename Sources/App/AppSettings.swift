@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import Scan
 
 /// Persisted app settings, backed by UserDefaults.
 ///
@@ -30,6 +31,7 @@ final class AppSettings: ObservableObject {
         static let showMeteringOverlay = "showMeteringOverlay"
         static let showBatteryIndicator = "showBatteryIndicator"
         static let showMeteredShutter = "showMeteredShutter"
+        static let previewRotation = "previewRotation"
     }
 
     // MARK: - Defaults
@@ -205,6 +207,19 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(showMeteredShutter, forKey: Key.showMeteredShutter) }
     }
 
+    // MARK: - Preview rotation
+
+    /// Quarter-turn rotation of the live preview. Persisted because a scanning
+    /// rig's camera-to-film orientation is fixed for a whole session (and
+    /// usually for good), so re-setting it on every launch would be busywork.
+    ///
+    /// TODO(feature 1): the requirement is that rotation persists "from image
+    /// to image until the negative size changes". The negative-size concept
+    /// arrives with auto-crop; once it does, a size change should reset this.
+    @Published var previewRotation: PreviewRotation {
+        didSet { defaults.set(previewRotation.rawValue, forKey: Key.previewRotation) }
+    }
+
     // MARK: - Init
 
     private init() {
@@ -275,6 +290,8 @@ final class AppSettings: ObservableObject {
         self.showBatteryIndicator = defaults.bool(forKey: Key.showBatteryIndicator)
         // Default OFF, value is sporadic on this body; opt-in.
         self.showMeteredShutter = defaults.bool(forKey: Key.showMeteredShutter)
+        // Missing key reads as 0, which is exactly `.none` — the right default.
+        self.previewRotation = PreviewRotation(rawValue: defaults.integer(forKey: Key.previewRotation)) ?? .none
         loadCaptureFolder()
     }
 }

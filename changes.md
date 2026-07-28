@@ -2,6 +2,64 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-07-27 — Rotate the live preview in 90° increments
+
+First item of the film-scanning feature roadmap. The preview can now be turned
+a quarter turn at a time so the negative reads right-way-up on screen no matter
+how the copy stand and the film holder are oriented.
+
+Rotation is a **display transform only** — nothing is written to the camera and
+captured files keep the body's native orientation. The value is persisted, both
+because a scanning rig's orientation is fixed for a whole session and because
+the rotation has to travel with each scan as metadata later (roadmap items 3
+and 7).
+
+**Design note — why everything else stays in sensor space:** the rotation is
+applied as the very last step of frame composition, after the zoom box has been
+drawn in. Metering centre, the measured `eoszoomposition` calibration, focus
+peaking, and the crop geometry still to come all keep working in unrotated
+sensor coordinates, so none of that hard-won calibration had to be re-measured.
+Only two places know rotation exists: the final blit, and the pointer/arrow-key
+mapping that converts what the user did on screen back into sensor space.
+
+**Changes:**
+
+- `Sources/Scan/` — **new library target** for the film-scanning domain model.
+  It's free of libgphoto2 and SwiftUI on purpose: `AppModel` is `@MainActor`
+  and window-server-bound, so logic living there can't be unit-tested. Crop
+  geometry, film sizes, and the sidecar payload will land here too.
+- `Sources/Scan/PreviewRotation.swift` — the rotation type. Quarter-turn
+  cycling, the sensor↔display point mapping and its direction-only variant for
+  arrow keys, aspect-ratio flipping, and an exact (non-resampling) CGImage
+  rotation.
+- `Tests/ScanTests/PreviewRotationTests.swift` — 12 tests. Beyond the round-trip
+  and cycling properties, one test marks a single pixel and asserts where it
+  lands after each turn; that's what actually pins down the sign of the rotation
+  angle, since a CGBitmapContext is y-up and a *visual* clockwise turn is a
+  negative angle there.
+- `Package.swift` — registered the `Scan` target + `ScanTests`, and added `Scan`
+  as an `App` dependency.
+- `Sources/App/AppSettings.swift` — `previewRotation`, persisted. A missing key
+  reads as 0, which is exactly `.none`, so no migration was needed.
+- `Sources/App/AppModel.swift` — `previewRotation` / `previewAspectRatio` and
+  the two rotate actions; frame composition rotates last; arrow-key nudges of
+  the zoom box now map the pressed direction through the rotation, so Up still
+  moves the box up on screen at every orientation.
+- `Sources/App/LiveViewPane.swift` — pane letterboxes to 2:3 instead of 3:2 on a
+  quarter turn, and click/drag positions un-rotate before clamping (clamping in
+  the wrong space would have pinned the wrong edges).
+- `Sources/App/ExposureBar.swift` — a rotate button, sitting next to the live-view
+  toggle, whose label doubles as the current-rotation readout. Fixed width, sized
+  for the widest label ("270°") so the number is never clipped and the
+  neighbouring buttons don't shuffle as the angle changes.
+- `Sources/App/FilmTetherApp.swift` — Cmd-R rotates right, Cmd-Shift-R rotates
+  left.
+- `README.md` — documented the feature.
+
+**Still open on this item:** the roadmap wants rotation remembered "until the
+negative size changes". Negative size arrives with auto-crop, so `AppSettings`
+carries a TODO to reset rotation on a size change once that concept exists.
+
 ## 2026-07-09 — Restore "RAW + L" / "cRAW + L" to the Format menu (libgphoto2 patch)
 
 **Problem:** On the R5, the Format menu offered every quality combo except

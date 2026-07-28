@@ -14,6 +14,7 @@ The handful of things that actually matter for the way I use it.
 - **RAW capture.** Saves the camera's RAW file (`.CR2`, `.CR3`, whatever the body produces) straight to a folder you pick, untouched and under its true extension. What the camera makes is what you get; RAW+JPEG saves both files.
 - **Work through a roll.** Tap Space to fire a frame, so working through a roll of negatives is quick.
 - **Exposure controls.** ISO, shutter, aperture, and white-balance Kelvin, all from the Mac. A control greys out when the current mode makes it read-only, so aperture priority just works.
+- **Rotate the preview.** Turn the live view 90° at a time (Cmd-R, or Cmd-Shift-R the other way) so the negative reads right-way-up however the copy stand is set up. Display only — the camera and the saved files are never touched — and the setting is remembered.
 - **Focus check.** Hold Shift to punch in using the camera's sensor and confirm your focus is sharp.
 - **Focus control.** Keyboard shortcuts for stepping focus, when the conditions are right (lens set to AF, live view on).
 - **Focus peaking.** An adjustable overlay that attempts to highlight what's in focus (far from perfect).
