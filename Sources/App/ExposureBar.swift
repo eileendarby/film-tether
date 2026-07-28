@@ -90,19 +90,24 @@ struct ExposureBar: View {
         .disabled(!model.isLiveViewOn)
     }
 
+    /// Cycles Fit → 100% → 500%. The label is the current zoom, with Fit
+    /// carrying its live percentage.
     @ViewBuilder
     private func zoomToggleButton() -> some View {
-        let isZoomed = model.zoomMode != .fit
+        let isZoomed = model.previewZoom.engagesCameraPunchIn
         Button {
-            Task { await model.toggleZoom() }
+            Task { await model.cyclePreviewZoom() }
         } label: {
             Label(
-                isZoomed ? "Zoom 5×" : "Zoom 1×",
+                model.previewZoomLabel,
                 systemImage: isZoomed ? "magnifyingglass.circle.fill" : "magnifyingglass.circle"
             )
             .labelStyle(.titleAndIcon)
+            // Sized for the widest label, "Fit (100%)", so the button doesn't
+            // twitch as the percentage changes during a window resize.
+            .frame(width: 92, alignment: .leading)
         }
-        .help("Toggle latched 5× sensor zoom. Hold Shift for momentary zoom while held. Drag the overlay rectangle to choose punch-in location BEFORE zooming.")
+        .help("Preview zoom, click to cycle: Fit (scaled to the pane) → 100% (one frame pixel per point) → 500% (the camera's own sensor punch-in, real detail rather than an upscale). Hold Shift for momentary 500% and it returns to where you were. Drag the overlay rectangle to choose the punch-in location BEFORE zooming.")
         .disabled(!model.isLiveViewOn)
     }
 

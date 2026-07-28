@@ -151,6 +151,44 @@ final class AppModel: ObservableObject {
         previewRotation.displayAspect(sensorAspect: 3.0 / 2.0)
     }
 
+    /// How the preview is scaled on screen. Session state, not persisted —
+    /// Fit is the right thing to land on every time you sit down.
+    @Published private(set) var previewZoom: PreviewZoom = .fit
+    /// Size of the preview pane in points, reported by the view layer. Feeds the
+    /// live "Fit (N%)" readout, so it has to come from real laid-out geometry
+    /// rather than an assumption about window size.
+    @Published var previewPaneSize: CGSize = .zero
+    /// Base zoom to restore when a momentary Shift-hold punch-in ends. Without
+    /// this, releasing Shift always dropped to Fit even if you were at 100%.
+    private var zoomBeforeHold: PreviewZoom = .fit
+
+    /// Percentage at which the current frame fits the pane, or nil when there's
+    /// nothing to measure (live view off, or pane not laid out yet).
+    var previewFitPercent: Int? {
+        guard let frame = latestFrame else { return nil }
+        return PreviewZoom.fitPercent(frame: frame.size, pane: previewPaneSize)
+    }
+
+    /// Label for the zoom button, e.g. "Fit (85%)", "100%", "500%".
+    var previewZoomLabel: String { previewZoom.label(fitPercent: previewFitPercent) }
+
+    /// Advance the zoom button: Fit → 100% → 500% → Fit.
+    func cyclePreviewZoom() async {
+        await setPreviewZoom(previewZoom.next)
+    }
+
+    /// Set the display zoom and bring the camera's punch-in in line with it.
+    /// Only 500% needs the body involved; Fit and 100% are host-side scaling of
+    /// the same full-frame stream, so switching between those two costs no USB
+    /// traffic at all.
+    func setPreviewZoom(_ z: PreviewZoom) async {
+        let wasPunchedIn = previewZoom.engagesCameraPunchIn
+        self.previewZoom = z
+        appLog.info("preview zoom → \(z.rawValue, privacy: .public)")
+        guard z.engagesCameraPunchIn != wasPunchedIn else { return }
+        await applyZoom(z.engagesCameraPunchIn ? .fivex : .fit)
+    }
+
     func rotatePreviewRight() {
         previewRotation = previewRotation.rotatedRight
         appLog.info("preview rotation → \(self.previewRotation.rawValue, privacy: .public)°")
@@ -474,6 +512,8 @@ final class AppModel: ObservableObject {
         // hold zooms to the prior position instead of the current overlay
         // location.
         zoomMode = .fit
+        previewZoom = .fit
+        zoomBeforeHold = .fit
         zoomBodyCenter = (2592, 1728)  // Evf-space center; recomputed on next zoom anyway
     }
 
@@ -825,14 +865,10 @@ final class AppModel: ObservableObject {
         await refreshSnapshot()
     }
 
-    /// Toggle 5× zoom mode latched (vs the momentary Space-hold). For the
-    /// toolbar zoom button: button = toggle, Space = hold.
+    /// Latched punch-in toggle, kept for any caller that wants a straight
+    /// in/out flip rather than the three-state cycle on the toolbar button.
     func toggleZoom() async {
-        if zoomMode == .fit {
-            await applyZoom(.fivex)
-        } else {
-            await applyZoom(.fit)
-        }
+        await setPreviewZoom(previewZoom.engagesCameraPunchIn ? .fit : .fiveX)
     }
 
     func setImageFormat(_ value: String) async {
@@ -1128,9 +1164,12 @@ final class AppModel: ObservableObject {
         case .pressed:
             // Trigger held (Shift by default) → punch in to 5× sensor zoom.
             // 10× was removed (silently no-ops on this 7D firmware).
-            await applyZoom(.fivex)
+            // Remember where we were so the release restores it: holding Shift
+            // from 100% used to dump you back at Fit.
+            if !previewZoom.engagesCameraPunchIn { zoomBeforeHold = previewZoom }
+            await setPreviewZoom(.fiveX)
         case .released:
-            await applyZoom(.fit)
+            await setPreviewZoom(zoomBeforeHold)
         case .arrow(let direction):
             // Arrow nudge moves the zoom rect by ONE FULL RECT STEP per
             // press (matches EOS Utility behavior). Now that zoom is

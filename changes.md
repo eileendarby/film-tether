@@ -2,6 +2,53 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-07-28 — Preview zoom as percentages, with a Fit mode (and a layout fix)
+
+**The bug first:** rotating the preview pushed the exposure toolbar and status
+footer off the bottom of the window. `NSImageView` publishes the image's pixel
+size as its `intrinsicContentSize`, and SwiftUI honours that — so a rotated
+(tall) frame grew the `VStack` past the window height. The enclosing
+`aspectRatio` already decides how big the pane should be, so `ImagePane` now
+opts out of intrinsic sizing entirely (`NSView.noIntrinsicMetric` on both axes)
+and clips its layer. The window is not resized; the layout simply stays inside
+it, which is also what keeps the interface intact at 100% where the image is
+routinely larger than the pane.
+
+**The zoom control** was a two-state toggle labelled "Zoom 1× / Zoom 5×". It's
+now a three-state cycle labelled in percentages, since percentages are what
+scanning software speaks:
+
+- **Fit (N%)** — the whole frame scaled to the pane. Default. N is computed from
+  real laid-out geometry, so it updates on window resize *and* on rotation: the
+  same frame turned on its side fits at a genuinely different percentage.
+- **100%** — one frame pixel per point, no scaling. The honest reference view.
+- **500%** — the camera's own sensor punch-in, as before. Worth stressing that
+  this is real sensor detail, not an upscale of the preview JPEG, which is why
+  it stays bound to `eoszoom` rather than becoming a host-side scale.
+
+Fit and 100% are both host-side scaling of the same full-frame stream, so
+switching between them costs no USB traffic at all — only entering or leaving
+500% talks to the body.
+
+**Changes:**
+
+- `Sources/Scan/PreviewZoom.swift` — new. The three states, cycle order, labels,
+  and the pure fit-percentage calculation.
+- `Tests/ScanTests/PreviewZoomTests.swift` — 8 tests, including one that pins
+  the "rotation recalculates the zoom" requirement as arithmetic: the same frame
+  in the same pane fits at 75% landscape and 50% portrait.
+- `Sources/App/LiveViewPane.swift` — the intrinsic-size fix and layer clipping;
+  `.scaleNone` at 100% vs `.scaleProportionallyUpOrDown` otherwise; reports its
+  laid-out size to the model so the Fit percentage can be real.
+- `Sources/App/AppModel.swift` — `previewZoom`, `previewPaneSize`,
+  `previewFitPercent`, `previewZoomLabel`, and the cycle/set actions. Session
+  state, not persisted: Fit is the right thing to land on each time. Also fixes
+  momentary Shift-hold, which used to dump you at Fit on release even if you'd
+  been at 100%; it now restores the zoom you came from.
+- `Sources/App/ExposureBar.swift` — the button cycles instead of toggling, fixed
+  width so it doesn't twitch as the percentage changes mid-resize.
+- `Sources/App/StatusFooter.swift` — readout follows the new labels.
+
 ## 2026-07-27 — Rotate the live preview in 90° increments
 
 First item of the film-scanning feature roadmap. The preview can now be turned

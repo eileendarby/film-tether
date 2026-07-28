@@ -58,8 +58,11 @@ struct StatusFooter: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
-            if model.zoomMode != .fit {
-                Text("Zoom: \(model.zoomMode.rawValue)x\(model.zoomFallbackActive ? " (sw)" : "")")
+            // Only worth footer space when the preview isn't showing the plain
+            // fitted frame; "(sw)" flags that the body refused the punch-in and
+            // we're upscaling a crop host-side instead of showing real detail.
+            if model.isLiveViewOn, model.previewZoom != .fit {
+                Text("Zoom: \(model.previewZoomLabel)\(model.zoomFallbackActive ? " (sw)" : "")")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
