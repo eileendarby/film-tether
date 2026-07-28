@@ -162,6 +162,116 @@ final class AppModel: ObservableObject {
     /// this, releasing Shift always dropped to Fit even if you were at 100%.
     private var zoomBeforeHold: PreviewZoom = .fit
 
+    // MARK: - Preview adjustments (monochrome + click white balance)
+
+    /// Host-side preview corrections, proxied to AppSettings so they persist.
+    /// Display-only: the camera keeps its own settings and captured files are
+    /// never re-encoded. Recorded per scan so the same treatment can be
+    /// replayed onto the RAW later.
+    var previewAdjustments: PreviewAdjustments {
+        get { AppSettings.shared.previewAdjustments }
+        set {
+            AppSettings.shared.previewAdjustments = newValue
+            objectWillChange.send()
+        }
+    }
+
+    /// True while the eyedropper is armed and the next click on the preview
+    /// will sample white balance instead of moving the metering box.
+    @Published private(set) var isPickingWhiteBalance: Bool = false
+
+    /// Short-lived status line for the footer — used to explain a refused
+    /// eyedropper sample, which otherwise just looks like a click that did
+    /// nothing.
+    @Published private(set) var notice: String? = nil
+    private var noticeTask: Task<Void, Never>?
+
+    /// Most recent frame as it came off the camera, before any adjustment.
+    /// The eyedropper samples this rather than what's on screen: sampling the
+    /// corrected preview would compound corrections, so clicking the same spot
+    /// twice would drift instead of being a no-op.
+    private var lastUnadjustedFrame: Data?
+
+    func toggleMonochrome() {
+        previewAdjustments.monochrome.toggle()
+        appLog.info("preview monochrome → \(self.previewAdjustments.monochrome, privacy: .public)")
+    }
+
+    /// Flip the preview between the raw negative and the positive it will
+    /// become. Display only — the captured RAW is still the negative.
+    func toggleInvert() {
+        previewAdjustments.invert.toggle()
+        appLog.info("preview invert → \(self.previewAdjustments.invert, privacy: .public)")
+        // White-balance picking is blocked while inverted (see
+        // `canPickWhiteBalance`). Disarm on the way in, or the button would grey
+        // out while the pane still sampled on the next click.
+        if previewAdjustments.invert, isPickingWhiteBalance {
+            isPickingWhiteBalance = false
+            showNotice("White balance picking cancelled — switch to Negative to sample")
+        }
+    }
+
+    /// White balance can only be sampled from the un-inverted negative.
+    ///
+    /// Sampling actually works fine while inverted — the eyedropper reads the
+    /// original frame either way — but with the preview flipped, the film base
+    /// is the *darkest* part of the picture rather than the brightest, so the
+    /// operator is being asked to click the opposite of what they've learned to
+    /// look for. Blocking it is a deliberate guard against picking the wrong
+    /// spot, not a technical limitation.
+    var canPickWhiteBalance: Bool {
+        isLiveViewOn && !previewAdjustments.invert
+    }
+
+    /// Arm or disarm the white-balance eyedropper.
+    func toggleWhiteBalancePicker() {
+        isPickingWhiteBalance.toggle()
+        if isPickingWhiteBalance {
+            showNotice("Click the film base to set white balance")
+        }
+    }
+
+    func resetWhiteBalance() {
+        previewAdjustments.whiteBalance = nil
+        isPickingWhiteBalance = false
+        showNotice("White balance reset to as-shot")
+        appLog.info("white balance reset")
+    }
+
+    /// Sample the frame at `point` (normalized, y-down, unrotated sensor space)
+    /// and set the white balance that renders it neutral.
+    func sampleWhiteBalance(atSensor point: CGPoint) {
+        isPickingWhiteBalance = false
+        guard let jpeg = lastUnadjustedFrame else {
+            showNotice("No frame to sample — start live view first")
+            return
+        }
+        guard let s = PreviewPipeline.sampleColor(jpeg: jpeg, atNormalized: point) else {
+            showNotice("Couldn't read that pixel")
+            return
+        }
+        guard let gains = ChannelGains.neutralizing(red: s.red, green: s.green, blue: s.blue) else {
+            // Refusing beats applying a wild correction from a near-black
+            // sample, but the user needs to know why nothing happened.
+            showNotice("That spot is too dark to balance from — pick a brighter one")
+            return
+        }
+        previewAdjustments.whiteBalance = gains
+        appLog.info("white balance set: r=\(gains.red, privacy: .public) g=\(gains.green, privacy: .public) b=\(gains.blue, privacy: .public)")
+        showNotice(String(format: "White balance set (R %.2f  G %.2f  B %.2f)",
+                          gains.red, gains.green, gains.blue))
+    }
+
+    private func showNotice(_ text: String) {
+        notice = text
+        noticeTask?.cancel()
+        noticeTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.notice = nil
+        }
+    }
+
     /// Percentage at which the current frame fits the pane, or nil when there's
     /// nothing to measure (live view off, or pane not laid out yet).
     var previewFitPercent: Int? {
@@ -505,6 +615,11 @@ final class AppModel: ObservableObject {
         }
         if case .streaming = ui { self.ui = .ready; appLog.info("stopLiveView: ui → .ready") }
         latestFrame = nil
+        // Nothing left to sample, so an armed eyedropper would just fail on the
+        // next click. The white balance itself is kept — it belongs to the film,
+        // not to the live-view session.
+        lastUnadjustedFrame = nil
+        isPickingWhiteBalance = false
         // Reset zoom state so the next LV session starts at fit + center,
         // not whatever the last session left it at. Without this, the body's
         // zoom position persists across LV restarts (because we never
@@ -554,16 +669,22 @@ final class AppModel: ObservableObject {
            let cropped = JPEGCrop.cropAt(jpeg, divisor: zoomMode.rawValue, center: meteringCenter) {
             jpeg = cropped
         }
-        if focusPeakingEnabled,
-           let peaked = FocusPeaking.apply(
-               toJPEG: jpeg,
-               mode: focusPeakingMode,
-               intensity: Float(AppSettings.shared.focusPeakingIntensity),
-               color: focusPeakingColor
-           ) {
-            jpeg = peaked
-        }
-        let base = NSImage(data: jpeg)
+        // Keep the frame exactly as the camera sent it for the eyedropper to
+        // sample; everything below is correction the sample must not see.
+        lastUnadjustedFrame = jpeg
+        let peaking = focusPeakingEnabled
+            ? PreviewPipeline.Peaking(
+                mode: focusPeakingMode,
+                intensity: Float(AppSettings.shared.focusPeakingIntensity),
+                color: focusPeakingColor
+              )
+            : nil
+        // One decode, one Core Image graph, one bitmap out. Returns nil when
+        // there's nothing to apply, which is the common case — then the JPEG
+        // goes straight to NSImage and Core Image never runs.
+        let base = PreviewPipeline.render(
+            jpeg: jpeg, adjustments: previewAdjustments, peaking: peaking
+        ) ?? NSImage(data: jpeg)
         // Draw the zoom box DIRECTLY INTO the frame (image-pixel space), not as
         // a separate SwiftUI overlay. This makes the box physically part of the
         // displayed image, so it can never drift from the image content the way

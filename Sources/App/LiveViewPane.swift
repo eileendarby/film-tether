@@ -24,11 +24,24 @@ struct LiveViewPane: View {
             ImagePaneRepresentable()
                 .aspectRatio(model.previewAspectRatio, contentMode: .fit)
                 .background(paneSizeReporter())
+            // Eyedropper takes over the whole pane while armed, so a click
+            // samples white balance instead of moving the metering box. It
+            // outranks the metering layer deliberately: the two would otherwise
+            // fight over the same click.
+            if model.isPickingWhiteBalance && model.isLiveViewOn {
+                EyedropperLayer { display in
+                    // Un-rotate so the sample comes from the pixel that
+                    // was actually under the crosshair.
+                    let s = model.previewRotation.sensorPoint(fromDisplay: display)
+                    model.sampleWhiteBalance(atSensor: s)
+                }
+                .aspectRatio(model.previewAspectRatio, contentMode: .fit)
+            }
             // Interaction layer ONLY, same rect as the image. The visible
             // box is composited into the frame (AppModel.drawZoomBox), always
             // shown while the overlay toggle is on (no fade). Click OR drag
             // anywhere to zip the box (zoom target), centered, to that point.
-            if model.showMeteringOverlay && model.isLiveViewOn && model.zoomMode == .fit {
+            else if model.showMeteringOverlay && model.isLiveViewOn && model.zoomMode == .fit {
                 GeometryReader { geo in
                     Color.clear
                         .contentShape(Rectangle())
@@ -68,6 +81,50 @@ struct LiveViewPane: View {
                     guard model.previewPaneSize != newValue else { return }
                     model.previewPaneSize = newValue
                 }
+        }
+    }
+}
+
+/// Click target for the white-balance eyedropper, showing a crosshair cursor so
+/// it's unambiguous which pixel is about to be sampled.
+///
+/// The crosshair is pushed on hover and popped on exit. `NSCursor.push()` is a
+/// *stack*, so an unbalanced pop leaks the cursor to the whole app — hence the
+/// `pushed` flag guarding both directions, plus the `onDisappear` cleanup. That
+/// last one is what actually matters in practice: taking a sample disarms the
+/// picker, so this view is usually torn down while the pointer is still inside
+/// it and no hover-exit ever arrives.
+private struct EyedropperLayer: View {
+    /// Called with the click position, normalized to the pane and y-down.
+    let onPick: (CGPoint) -> Void
+
+    @State private var pushed = false
+
+    var body: some View {
+        GeometryReader { geo in
+            Color.clear
+                .contentShape(Rectangle())
+                .onHover { inside in
+                    if inside, !pushed {
+                        NSCursor.crosshair.push()
+                        pushed = true
+                    } else if !inside, pushed {
+                        NSCursor.pop()
+                        pushed = false
+                    }
+                }
+                .onTapGesture { location in
+                    onPick(CGPoint(
+                        x: location.x / max(geo.size.width, 1),
+                        y: location.y / max(geo.size.height, 1)
+                    ))
+                }
+        }
+        .onDisappear {
+            if pushed {
+                NSCursor.pop()
+                pushed = false
+            }
         }
     }
 }

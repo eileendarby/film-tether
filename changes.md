@@ -2,6 +2,148 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-07-28 — Negative inversion, black-and-white preview, click-to-set white balance
+
+Roadmap items 5 and 8 plus preview inversion, built together because they're
+the same thing mechanically: host-side processing of the live frame. All are
+display corrections — the camera is never reconfigured and captured files are
+never re-encoded — and all are recorded so the treatment can be replayed onto
+the RAW later and reported to the server.
+
+- **Invert** (Cmd-I, or the Negative/Positive toolbar button). Shows a negative
+  as the positive image it will become. Judging framing, focus and exposure on
+  an inverted image is guesswork.
+- **B&W preview** (Cmd-B, or the Color/B&W toolbar button). Raw pixels off a
+  black-and-white negative carry no meaningful colour, so showing them in
+  colour is just noise to judge exposure and focus through.
+- **Click-to-set white balance.** Arm the eyedropper, click the unexposed film
+  base, and its cast is neutralised. Gains are per-channel rather than a colour
+  temperature, because a film base is off-neutral on *both* axes and the
+  camera's Kelvin-only control can slide blue↔amber but cannot touch
+  green↔magenta at all. That's precisely why the correction lives on the host.
+
+**Stage order is deliberate:** white balance → invert → monochrome → peaking.
+White balance comes before inversion because the film base cast is a property
+of the *negative*, so it's neutralised there and the result is then inverted —
+that's the order film scanning wants. Invert and monochrome commute
+(desaturation is linear, so `luma(1−c) == 1−luma(c)`). Peaking is last so its
+highlights sit on top and keep their colour over a desaturated or inverted
+frame. Verified on a real R5 frame: after white balance the sampled point sits
+at level 0.368, and after inversion at 0.632 — exactly `1 − 0.368` — still
+neutral to within JPEG rounding.
+
+**One pass, not four.** Peaking used to decode the JPEG, filter it, re-encode
+to JPEG, and hand that back to be decoded again. Adding three more effects that
+way would have meant four decodes and three pointless lossy round-trips per
+frame, at 30 fps. `PreviewPipeline` now decodes once, runs every enabled stage
+as a single Core Image graph, and produces one bitmap.
+`FocusPeaking` was refactored from JPEG-to-JPEG into a `CIImage` stage to suit.
+When nothing is enabled the pipeline returns nil and the caller uses the raw
+JPEG, so the common case still costs nothing.
+
+**The load-bearing detail: colour management is deliberately disabled** in the
+pipeline's `CIContext` (`workingColorSpace` of null). `PixelSampler` reads
+gamma-encoded sRGB bytes to compute the gains, so Core Image has to apply them
+in that same space. Measured on a synthetic film-base colour, applying gains
+through a default (managed) context leaves a channel spread of **0.384** — the
+correction barely lands, because a gain of k applied in linear space behaves
+like k^(1/2.2). Through the unmanaged context the spread is **0.0000**. Verified
+again on a real R5 preview frame: a warm cast of R 0.543 / G 0.372 / B 0.190
+corrected to a spread of 0.0013, which is JPEG rounding.
+
+A related trap found while testing: `CGColorSpaceCreateDeviceRGB()` is **not**
+sRGB on macOS. Reading through it turned a pure sRGB red into
+(0.98, 0.15, 0.20), which would have baked a phantom cast into every sample.
+`PixelSampler` now names sRGB explicitly.
+
+**Changes:**
+
+The eyedropper samples the **unadjusted** frame, so a second click on the same
+spot is a no-op rather than compounding the correction.
+
+**White-balance picking is disabled while the preview is inverted.** It would
+work — the eyedropper reads the original frame either way — but with a positive
+on screen the film base is the *darkest* part of the picture rather than the
+brightest, so the operator is being asked to click the opposite of what they've
+learned to look for. That's a deliberate guard against picking the wrong spot,
+not a technical limitation. Turning invert on while the eyedropper is armed also
+disarms it: otherwise the button would grey out while the pane still sampled on
+the next click.
+
+- `Sources/Scan/PreviewAdjustments.swift` — new. `ChannelGains` (neutralising
+  math, clamped so a near-black sample can't produce an enormous multiplier,
+  refused outright below a usable level) and `PreviewAdjustments`.
+- `Sources/Scan/PixelSampler.swift` — new. Averages a 9×9 patch rather than
+  reading one pixel, which is what makes repeated clicks on the same film base
+  agree instead of chasing grain.
+- `Tests/ScanTests/PreviewAdjustmentsTests.swift`, `PixelSamplerTests.swift` —
+  17 tests, including that the gains actually neutralise the colour they came
+  from, that brightness is preserved so correcting isn't also an exposure
+  change, and quadrant tests pinning the y-down/top-left sampling convention.
+- `Sources/App/PreviewPipeline.swift` — new. The single pass, plus the
+  eyedropper's sampling entry point.
+- `Sources/App/FocusPeaking.swift` — `apply(toJPEG:)` became `overlay(on:)`.
+- `Sources/App/AppModel.swift` — adjustment state, eyedropper arming, sampling
+  against the **unadjusted** frame (sampling the corrected preview would
+  compound, so a second click would drift instead of being a no-op), and a
+  short-lived footer notice so a refused sample doesn't look like a dead click.
+- `Sources/App/AppSettings.swift` — both persisted; they're properties of the
+  film being scanned, not of the app session.
+- `Sources/App/LiveViewPane.swift` — while armed, the eyedropper takes the whole
+  pane so it can't fight the metering box over the same click; the point is
+  un-rotated before sampling. The pointer becomes a crosshair so the pixel about
+  to be sampled is unambiguous. `NSCursor.push()` is a stack, so the layer
+  guards both directions with a flag and pops on `onDisappear` — taking a sample
+  disarms the picker, which tears the layer down while the pointer is still
+  inside it, so no hover-exit ever arrives and an unguarded push would leak the
+  crosshair to the whole app.
+- `Sources/App/ExposureBar.swift`, `FilmTetherApp.swift`, `StatusFooter.swift` —
+  buttons, menu items (including Reset White Balance), and footer readouts.
+- `Sources/App/ExposureBar.swift` — the live-view button now reads as current
+  state ("Live View ON") rather than as the action it performs ("Stop Live
+  View"). Every other toggle in the bar already showed state, so this was the
+  odd one out; an audit confirmed the rest were consistent. Menu items keep
+  command phrasing, which is the macOS convention for menus.
+- `Sources/App/ExposureBar.swift`, `MainView.swift`, `FilmTetherApp.swift` —
+  responsive toolbar. Below 1400pt of bar width the secondary toggles (invert,
+  B&W, white balance, peaking, box) collapse to icons alone; capture, live view,
+  zoom and rotation keep their text at every size. The last two have to: they
+  double as readouts and their value — the angle, the fit percentage — can't be
+  shown by an icon. Collapsing the rest costs nothing readability-wise because
+  each icon already encodes its own on/off state, and each button has a `.help`
+  tooltip naming it.
+
+  **No pixel thresholds anywhere in this.** A first attempt used a hand-guessed
+  1400pt threshold with a 1150pt window minimum, and both numbers were wrong in
+  the direction that hurts: the labelled bar actually needs more than 1400, so
+  labels stayed on while being clipped across a wide band of window sizes, and
+  1150 was ~130pt below what the bar needs even in its compact form, so the
+  window could be dragged narrow enough to lose controls entirely.
+
+  The fix removes the guessing rather than re-tuning it:
+
+  - `ViewThatFits(in: .horizontal)` picks the labelled bar when it fits and the
+    icons-only bar otherwise, so the switch lands exactly where clipping would
+    have started. This must not sit inside a horizontal `ScrollView` — a scroll
+    view offers unlimited width, so the labelled variant would always "fit" and
+    the compact one would never be chosen.
+  - The `ScrollView` is gone, which is also what stops buttons being scrolled
+    out of sight.
+  - The window's explicit `minWidth` is gone too. With no scroll view absorbing
+    it, the compact bar's own intrinsic width propagates up as the content
+    minimum, and `.windowResizability(.contentMinSize)` makes that the window
+    minimum. **Measured at 1280×852** — so the window physically cannot be made
+    narrow enough to hide a control, and the figure stays correct on its own as
+    buttons are added later instead of silently rotting.
+  - `AppDelegate` gained an `EOS_DEBUG=1` report of the window's enforced
+    minimum (unified logging plus a temp file, since a GUI app has no useful
+    stderr). That measurement is what confirmed the 1280 above, and it makes a
+    future regression visible rather than silent.
+
+  Zoom also moved to sit beside the live-view button, which puts all four
+  always-labelled controls together in one group.
+- `README.md` — documented both.
+
 ## 2026-07-28 — Verified "Sync Camera Clock to Host" on the Canon R5
 
 No behaviour change — this entry records a hardware verification, because the

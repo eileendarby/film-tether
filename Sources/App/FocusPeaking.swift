@@ -18,8 +18,6 @@ import AppKit
 /// Caller toggles the mode and color via AppModel; we lazily build filters
 /// per call (CI graph is JIT-compiled and cached internally).
 enum FocusPeaking {
-    /// Cached CIContext, recreating per call is expensive (~50ms first call).
-    private static let context = CIContext(options: [.useSoftwareRenderer: false])
 
     /// Eight high-contrast palette options. Cycle via Cmd-Shift-P; bound to
     /// AppModel.focusPeakingColor and persisted via AppSettings. Defaults skip
@@ -97,9 +95,13 @@ enum FocusPeaking {
         }
     }
 
-    /// Apply peaking to a JPEG-encoded frame. Returns nil if decode/encode
-    /// fails or the input isn't a valid JPEG. Caller falls back to raw frame
-    /// on nil.
+    /// Composite peaking highlights over `inputCI` and return the result.
+    /// Returns nil if the filter graph fails; the caller then shows the
+    /// unpeaked frame rather than nothing.
+    ///
+    /// Works at the `CIImage` level rather than JPEG-to-JPEG so it can be one
+    /// stage of `PreviewPipeline` — the frame is decoded once for all the
+    /// host-side adjustments together instead of once per effect.
     ///
     /// `intensity` controls sensitivity. 1.0 = obvious edges only; 3.0+
     /// picks up subtle texture (film grain, fine fabric, pixel-scale noise).
@@ -108,14 +110,12 @@ enum FocusPeaking {
     /// `.grain` is opt-in via Settings → Live View; tuned
     /// conservatively (lower alpha multiplier) so it lights up actual grain
     /// instead of solid-tinting flat regions.
-    static func apply(
-        toJPEG jpegData: Data,
+    static func overlay(
+        on inputCI: CIImage,
         mode: Mode = .edges,
         intensity: Float = 3.0,
         color: PeakColor = .cyan
-    ) -> Data? {
-        guard let inputCI = CIImage(data: jpegData) else { return nil }
-
+    ) -> CIImage? {
         let highFreq: CIImage?
         switch mode {
         case .edges: highFreq = edgesImage(inputCI, intensity: intensity)
@@ -145,13 +145,7 @@ enum FocusPeaking {
         let composite = CIFilter.sourceOverCompositing()
         composite.inputImage = tinted
         composite.backgroundImage = inputCI
-        guard let composited = composite.outputImage else { return nil }
-
-        guard let cg = context.createCGImage(composited, from: inputCI.extent) else {
-            return nil
-        }
-        let rep = NSBitmapImageRep(cgImage: cg)
-        return rep.representation(using: .jpeg, properties: [.compressionFactor: 0.85])
+        return composite.outputImage?.cropped(to: inputCI.extent)
     }
 
     private static func edgesImage(_ input: CIImage, intensity: Float) -> CIImage? {

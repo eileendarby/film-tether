@@ -32,6 +32,9 @@ final class AppSettings: ObservableObject {
         static let showBatteryIndicator = "showBatteryIndicator"
         static let showMeteredShutter = "showMeteredShutter"
         static let previewRotation = "previewRotation"
+        static let previewMonochrome = "previewMonochrome"
+        static let previewInvert = "previewInvert"
+        static let previewWhiteBalance = "previewWhiteBalance"
     }
 
     // MARK: - Defaults
@@ -220,6 +223,28 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(previewRotation.rawValue, forKey: Key.previewRotation) }
     }
 
+    // MARK: - Preview adjustments (monochrome + white balance)
+
+    /// Host-side preview corrections. Persisted because both are properties of
+    /// the film you're working through, not of the app session — a roll of
+    /// black-and-white stock stays black-and-white across a lunch break, and
+    /// the film base you sampled is the same base after a relaunch.
+    ///
+    /// Stored as two defaults keys rather than one encoded blob so the values
+    /// stay legible in `defaults read` when diagnosing a scanning session.
+    @Published var previewAdjustments: PreviewAdjustments {
+        didSet {
+            defaults.set(previewAdjustments.monochrome, forKey: Key.previewMonochrome)
+            defaults.set(previewAdjustments.invert, forKey: Key.previewInvert)
+            if let wb = previewAdjustments.whiteBalance,
+               let data = try? JSONEncoder().encode(wb) {
+                defaults.set(data, forKey: Key.previewWhiteBalance)
+            } else {
+                defaults.removeObject(forKey: Key.previewWhiteBalance)
+            }
+        }
+    }
+
     // MARK: - Init
 
     private init() {
@@ -292,6 +317,13 @@ final class AppSettings: ObservableObject {
         self.showMeteredShutter = defaults.bool(forKey: Key.showMeteredShutter)
         // Missing key reads as 0, which is exactly `.none` — the right default.
         self.previewRotation = PreviewRotation(rawValue: defaults.integer(forKey: Key.previewRotation)) ?? .none
+        let storedWB = defaults.data(forKey: Key.previewWhiteBalance)
+            .flatMap { try? JSONDecoder().decode(ChannelGains.self, from: $0) }
+        self.previewAdjustments = PreviewAdjustments(
+            monochrome: defaults.bool(forKey: Key.previewMonochrome),
+            invert: defaults.bool(forKey: Key.previewInvert),
+            whiteBalance: storedWB
+        )
         loadCaptureFolder()
     }
 }

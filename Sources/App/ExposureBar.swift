@@ -5,6 +5,14 @@ import Scan
 struct ExposureBar: View {
     @EnvironmentObject var model: AppModel
 
+    /// Collapse the secondary toggles to icons. Chosen by `ViewThatFits` in
+    /// MainView rather than by a width threshold, so the switch lands exactly
+    /// where the labels stop fitting. Capture, live view, rotation
+    /// and zoom keep their text at every size — they're the controls you reach
+    /// for constantly, and the last two double as state readouts whose value
+    /// (the angle, the percentage) can't be shown by an icon at all.
+    var compact: Bool = false
+
     var body: some View {
         HStack(spacing: 10) {
             menuPicker(
@@ -33,10 +41,34 @@ struct ExposureBar: View {
             Divider().frame(height: 28)
             captureButton()
             liveViewToggle()
+            zoomToggleButton()
             rotateButton()
+            invertToggleButton()
+            monoToggleButton()
+            whiteBalanceButton()
             peakingToggleButton()
             boxToggleButton()
-            zoomToggleButton()
+        }
+    }
+
+    /// Label for a toggle that collapses to its icon in a narrow window.
+    ///
+    /// The icons carry the on/off state on their own (filled vs outline, and so
+    /// on), so collapsing the text doesn't cost you the ability to read the
+    /// current state — which is the whole point of these buttons. Every one of
+    /// them has a `.help` tooltip naming it, which is what you get back when
+    /// the text is gone.
+    @ViewBuilder
+    private func adaptiveLabel(
+        _ title: String, systemImage: String, width: CGFloat
+    ) -> some View {
+        if compact {
+            Label(title, systemImage: systemImage)
+                .labelStyle(.iconOnly)
+        } else {
+            Label(title, systemImage: systemImage)
+                .labelStyle(.titleAndIcon)
+                .frame(width: width, alignment: .leading)
         }
     }
 
@@ -60,16 +92,67 @@ struct ExposureBar: View {
         .help("Rotate the live preview 90° clockwise (Cmd-R; Cmd-Shift-R goes counter-clockwise). Display only — the camera and the saved files are untouched.")
     }
 
+    /// Negative / positive toggle. The label names what you're currently
+    /// looking at, matching how the rotation button reads.
+    @ViewBuilder
+    private func invertToggleButton() -> some View {
+        let inverted = model.previewAdjustments.invert
+        Button {
+            model.toggleInvert()
+        } label: {
+            adaptiveLabel(inverted ? "Positive" : "Negative",
+                          systemImage: inverted ? "circle.righthalf.filled.inverse" : "film",
+                          width: 82)
+        }
+        .help("Invert the preview so a negative shows as the positive image (Cmd-I). Judging framing and focus on an inverted image is guesswork. Display only — the captured RAW is still the negative.")
+    }
+
+    /// Colour / B&W preview toggle. Enabled even with live view off, since it's
+    /// a property of the film you're about to scan, not of the stream.
+    @ViewBuilder
+    private func monoToggleButton() -> some View {
+        let mono = model.previewAdjustments.monochrome
+        Button {
+            model.toggleMonochrome()
+        } label: {
+            adaptiveLabel(mono ? "B&W" : "Color",
+                          systemImage: mono ? "circle.lefthalf.filled" : "paintpalette",
+                          width: 62)
+        }
+        .help("Show the preview in black and white (Cmd-B). Raw pixels off a B&W negative carry no useful colour, so judging exposure and focus is easier without it. Display only — the camera and the saved files are untouched.")
+    }
+
+    /// Arms the eyedropper; the next click on the preview sets white balance.
+    /// Shows the sampled state so it's obvious a correction is active.
+    @ViewBuilder
+    private func whiteBalanceButton() -> some View {
+        let armed = model.isPickingWhiteBalance
+        let isSet = model.previewAdjustments.whiteBalance != nil
+        Button {
+            model.toggleWhiteBalancePicker()
+        } label: {
+            adaptiveLabel(
+                armed ? "Pick…" : (isSet ? "WB set" : "WB"),
+                systemImage: armed ? "eyedropper.halffull" : "eyedropper",
+                width: 68
+            )
+        }
+        .help(model.previewAdjustments.invert
+              ? "Unavailable while the preview is inverted: with a positive on screen the film base is the darkest part of the picture, not the brightest, which invites clicking the wrong spot. Switch to Negative to sample."
+              : "Click here, then click the unexposed film base in the preview to neutralise its colour cast. Corrects both blue/amber and green/magenta, which the camera's Kelvin-only white balance can't. Reset it from the Preview menu.")
+        .disabled(!model.canPickWhiteBalance)
+    }
+
     @ViewBuilder
     private func boxToggleButton() -> some View {
         Button {
             model.showMeteringOverlay.toggle()
         } label: {
-            Label(
+            adaptiveLabel(
                 model.showMeteringOverlay ? "Box ON" : "Box OFF",
-                systemImage: model.showMeteringOverlay ? "plus.viewfinder" : "viewfinder"
+                systemImage: model.showMeteringOverlay ? "plus.viewfinder" : "viewfinder",
+                width: 74
             )
-            .labelStyle(.titleAndIcon)
         }
         .help("Show/hide the zoom-target crosshair box (default on). Click anywhere on live view to move it.")
         .disabled(!model.isLiveViewOn)
@@ -80,11 +163,11 @@ struct ExposureBar: View {
         Button {
             model.focusPeakingEnabled.toggle()
         } label: {
-            Label(
+            adaptiveLabel(
                 model.focusPeakingEnabled ? "Peaking ON" : "Peaking OFF",
-                systemImage: model.focusPeakingEnabled ? "scope" : "circle.dotted"
+                systemImage: model.focusPeakingEnabled ? "scope" : "circle.dotted",
+                width: 102
             )
-            .labelStyle(.titleAndIcon)
         }
         .help("Toggle focus peaking overlay (Cmd-P). Cmd-Shift-P cycles color.")
         .disabled(!model.isLiveViewOn)
@@ -327,11 +410,17 @@ struct ExposureBar: View {
                 }
             }
         } label: {
-            Text(model.isLiveViewOn ? "Stop Live View" : "Start Live View")
+            // Reads as current state ("Live View ON"), not as the action it
+            // performs ("Stop Live View"), matching every other toggle in this
+            // bar. The menu item stays phrased as a command, which is the
+            // macOS convention for menus.
+            Text(model.isLiveViewOn ? "Live View ON" : "Live View OFF")
                 .frame(width: 104)
         }
         .keyboardShortcut("l", modifiers: [.command])
-        .help("Toggle live preview (Cmd-L)")
+        .help(model.isLiveViewOn
+              ? "Live preview is running. Click to stop it (Cmd-L)."
+              : "Live preview is off. Click to start it (Cmd-L).")
     }
 
     private func writableForCurrentMode(_ prop: String) -> Bool {

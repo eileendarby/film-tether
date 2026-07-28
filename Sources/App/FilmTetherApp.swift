@@ -1,5 +1,8 @@
 import SwiftUI
 import AppKit
+import os
+
+private let layoutLog = Logger(subsystem: "co.wonders.filmtether", category: "Layout")
 
 @main
 struct FilmTetherApp: App {
@@ -22,13 +25,20 @@ struct FilmTetherApp: App {
         WindowGroup("Film Tether") {
             MainView()
                 .environmentObject(model)
-                // 1400×820: comfortably wider than the full toolbar
-                // contents (ISO/Tv/Av/WB/Format pickers + 6 focus buttons
-                // + Capture + Stop LV + Peaking + Zoom buttons ≈ 1350px)
-                // so the toolbar never has to scroll, AND tall enough
-                // that the 3:2 LV image area gets ~600+ vertical pixels
-                // for usable focus checking.
-                .frame(minWidth: 1400, minHeight: 820)
+                // No explicit minWidth on purpose. The toolbar's compact
+                // (icons-only) layout has a real intrinsic width, and with the
+                // horizontal ScrollView gone that width propagates up as the
+                // content's minimum — which `.windowResizability(.contentMinSize)`
+                // below turns into the window's minimum. So the window
+                // physically cannot be dragged narrow enough to hide a control,
+                // and it stays correct on its own as buttons are added later. A
+                // hardcoded number here would silently become wrong instead, and
+                // could sit *below* the bar's true width, which is exactly how
+                // buttons ended up clipped before.
+                //
+                // Height still wants ~820: the live-view pane needs 600+
+                // vertical pixels to be usable for focus checking.
+                .frame(minHeight: 820)
                 .task {
                     // Hand the model to the delegate so its applicationWillTerminate
                     // hook can run a clean stop() before the process dies.
@@ -81,6 +91,31 @@ struct FilmTetherApp: App {
                 }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .help("Turn the live preview 90° counter-clockwise. Cmd-Shift-R.")
+                Divider()
+                Button(model.previewAdjustments.invert
+                       ? "Show Preview as Negative" : "Show Preview as Positive") {
+                    model.toggleInvert()
+                }
+                .keyboardShortcut("i", modifiers: [.command])
+                .help("Invert the preview so a negative shows as the positive image. Cmd-I. Display only — the captured RAW is still the negative.")
+                Button(model.previewAdjustments.monochrome
+                       ? "Show Preview in Color" : "Show Preview in Black & White") {
+                    model.toggleMonochrome()
+                }
+                .keyboardShortcut("b", modifiers: [.command])
+                .help("Raw pixels off a B&W negative carry no useful colour. Cmd-B. Display only — the saved files are untouched.")
+                Button(model.isPickingWhiteBalance
+                       ? "Cancel White Balance Pick" : "Pick White Balance from Preview…") {
+                    model.toggleWhiteBalancePicker()
+                }
+                .disabled(!model.canPickWhiteBalance)
+                .help("Then click the unexposed film base in the preview to neutralise its cast. Unavailable while the preview is inverted, where the base is the darkest part of the picture rather than the brightest.")
+                Button("Reset White Balance") {
+                    model.resetWhiteBalance()
+                }
+                .disabled(model.previewAdjustments.whiteBalance == nil)
+                .help("Go back to the camera's as-shot colour.")
+                Divider()
                 Button(model.focusPeakingEnabled ? "Disable Focus Peaking" : "Enable Focus Peaking") {
                     model.focusPeakingEnabled.toggle()
                 }
@@ -134,6 +169,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// @StateObject AppModel. Reading it before that point is a programming
     /// error (and a no-op via the optional unwrap below).
     static var activeModel: AppModel?
+
+    /// Reports the window minimum the layout actually ended up enforcing.
+    /// The toolbar's minimum width is derived from its compact layout rather
+    /// than hardcoded, so this is the only way to see the real number — and it
+    /// makes a regression (a control becoming reachable-but-clipped) visible
+    /// instead of silent. Debug builds only via EOS_DEBUG; stream with:
+    ///   log stream --predicate 'subsystem == "co.wonders.filmtether"' --info
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard ProcessInfo.processInfo.environment["EOS_DEBUG"] == "1" else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            var report = ""
+            for w in NSApp.windows where w.isVisible {
+                let line = "window frame=\(NSStringFromRect(w.frame)) minSize=\(NSStringFromSize(w.minSize)) contentMinSize=\(NSStringFromSize(w.contentMinSize))"
+                layoutLog.info("\(line, privacy: .public)")
+                report += line + "\n"
+            }
+            // Also to a file: a GUI app has no useful stderr, and unified
+            // logging isn't always readable from a sandboxed shell.
+            let path = NSTemporaryDirectory() + "filmtether-layout.txt"
+            try? report.write(toFile: path, atomically: true, encoding: .utf8)
+        }
+    }
 
     /// Async-clean shutdown. We CANNOT use applicationWillTerminate +
     /// DispatchGroup.wait: that blocks the main thread, but model.stop() is
