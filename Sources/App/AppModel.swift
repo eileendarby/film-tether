@@ -54,6 +54,10 @@ final class AppModel: ObservableObject {
         var battery: String = "—"
         var meteringMode: String = "—"
         var cameraDateTime: Date? = nil
+        /// Camera clock minus host clock at the last read. See
+        /// `refreshSnapshot` for why the offset is stored rather than only the
+        /// timestamp. Nil until the camera's clock has been read once.
+        var cameraClockOffset: TimeInterval? = nil
         var fps: Double = 0
 
         // Pretty-formatted display strings. Computed from raw values via
@@ -191,6 +195,10 @@ final class AppModel: ObservableObject {
     /// corrected preview would compound corrections, so clicking the same spot
     /// twice would drift instead of being a no-op.
     private var lastUnadjustedFrame: Data?
+
+    /// Previous raw camera-clock reading, used to tell a live value from the
+    /// driver's per-session cache. See `refreshSnapshot`.
+    private var lastRawCameraClock: Date?
 
     func toggleMonochrome() {
         previewAdjustments.monochrome.toggle()
@@ -464,6 +472,9 @@ final class AppModel: ObservableObject {
             self.liveZoom = nil
             self.ui = .disconnected
             self.latestFrame = nil
+            // New session means a new cache, so the next reading is genuinely
+            // fresh and must be allowed to set the offset.
+            self.lastRawCameraClock = nil
             // Reset per-session state so the next connection re-probes zoom etc.
             self.zoomProbed = false
             zoomProbeTask?.cancel()
@@ -818,17 +829,46 @@ final class AppModel: ObservableObject {
     /// detailed why.
     func syncCameraClockLocal() async {
         appLog.info("syncCameraClockLocal() called")
-        guard let p = properties else { return }
-        let tzOffset = AppSettings.shared.cameraTZOffsetMinutes
-        do {
-            try await p.syncDateTimeToHostLocal(tzOffsetMinutes: tzOffset)
-            appLog.info("camera datetime synced (tzOffset=\(tzOffset, privacy: .public)min)")
-            await refreshSnapshot()
-        } catch let err as CameraError {
-            appLog.error("syncCameraClockLocal failed: \(err.localizedDescription, privacy: .public)")
-        } catch {
-            appLog.error("syncCameraClockLocal failed: \(String(describing: error), privacy: .public)")
+        guard let p = properties else {
+            showNotice("Not connected — can't sync the clock")
+            return
         }
+        let tzOffset = AppSettings.shared.cameraTZOffsetMinutes
+        // MUST run under withLVPriority, like every other camera write in this
+        // class. Without it the write competes with the 30 FPS preview stream
+        // for the USB pipe and fails with -110 (I/O in progress) during live
+        // view — which is exactly when someone notices the clock and clicks it.
+        // The throw was caught and only logged, so the click silently did
+        // nothing and the readout never changed.
+        var failure: Error?
+        await withLVPriority {
+            do {
+                try await p.syncDateTimeToHostLocal(tzOffsetMinutes: tzOffset)
+                appLog.info("camera datetime synced (tzOffset=\(tzOffset, privacy: .public)min)")
+            } catch {
+                failure = error
+            }
+        }
+        if let failure {
+            let message = (failure as? CameraError)?.localizedDescription
+                ?? String(describing: failure)
+            appLog.error("syncCameraClockLocal failed: \(message, privacy: .public)")
+            // Surface it. A silent failure here is what made this look like a
+            // dead button rather than a failed write.
+            showNotice("Clock sync failed: \(message)")
+            return
+        }
+        await refreshSnapshot()
+        // A successful sync sets the camera's clock to the host's, so the offset
+        // is zero by definition. Assert that rather than reading it back: the
+        // driver caches this property per session, and there's no guarantee the
+        // cache reflects a write we just made — trusting the read here is how
+        // a freshly-synced clock could end up displaying a stale offset.
+        var s = snapshot
+        s.cameraClockOffset = 0
+        snapshot = s
+        lastRawCameraClock = s.cameraDateTime
+        showNotice("Camera clock synced to host")
     }
 
     /// Legacy menu hook, still wired in FilmTetherApp's commands for users who
@@ -1142,7 +1182,50 @@ final class AppModel: ObservableObject {
         if let v = snap.imageFormat  { s.imageFormat = v }
         if let v = snap.battery      { s.battery = v }
         if let v = snap.meteringMode { s.meteringMode = v }
-        s.cameraDateTime = snap.cameraDateTime ?? s.cameraDateTime
+        if let camTime = snap.cameraDateTime {
+            s.cameraDateTime = camTime
+            // Store the camera-vs-host *offset* rather than the raw timestamp:
+            // both clocks tick in real time, so the offset is the stable
+            // quantity and the footer can reconstruct `now + offset`.
+            //
+            // Only recompute it from a reading we can prove is FRESH. The ptp2
+            // driver caches this property for the life of the session — measured
+            // with `clock-watch`: zero advance over 12s of wall time — so in the
+            // app (one long-lived session, unlike the one-shot CLI) every read
+            // after the first returns the connect-time value. Recomputing from
+            // that made the offset a second more negative per second, so the
+            // readout ticked forward and then snapped back by the full refresh
+            // interval, over and over, while never matching the host.
+            //
+            // A changed reading proves the value is live; an identical one means
+            // we're looking at the cache, and the existing offset is the better
+            // estimate. The camera's clock itself is accurate (measured: ~1s
+            // over 14 hours), so an offset taken once at connect stays good.
+            let isFresh = camTime != lastRawCameraClock
+            if isFresh {
+                lastRawCameraClock = camTime
+                s.cameraClockOffset = camTime.timeIntervalSince(Date())
+            }
+            if ProcessInfo.processInfo.environment["EOS_DEBUG"] == "1" {
+                // Appended so the *sequence* is visible: a healthy offset holds
+                // steady, the old bug made it fall by one second per second.
+                let line = String(
+                    format: "%@ raw=%@ fresh=%@ offset=%+.0fs\n",
+                    ISO8601DateFormatter().string(from: Date()),
+                    ISO8601DateFormatter().string(from: camTime),
+                    isFresh ? "Y" : "N",
+                    s.cameraClockOffset ?? 0
+                )
+                let path = NSTemporaryDirectory() + "filmtether-clock.txt"
+                if let handle = FileHandle(forWritingAtPath: path) {
+                    handle.seekToEndOfFile()
+                    handle.write(Data(line.utf8))
+                    try? handle.close()
+                } else {
+                    try? line.write(toFile: path, atomically: true, encoding: .utf8)
+                }
+            }
+        }
         self.snapshot = s
         self.snapshotTick &+= 1
         appLog.info("snapshot[\(self.snapshotTick, privacy: .public)]: iso=\(s.iso, privacy: .public) Tv=\(s.shutter, privacy: .public) Av=\(s.aperture, privacy: .public) K=\(s.whiteBalanceKelvin ?? -1, privacy: .public) mode=\(s.mode, privacy: .public) fmt=\(s.imageFormat, privacy: .public) batt=\(s.battery, privacy: .public)")

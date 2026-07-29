@@ -488,6 +488,15 @@ public final class CameraProperties {
     /// `settings/datetimeutc` is the one that actually takes, which is what we
     /// write below. Don't "simplify" this to write `datetime`.
     ///
+    /// **Measured 2026-07-28: on the R5 the `datetimeutc` write below is
+    /// rejected and the `syncdatetimeutc` action fallback is what actually
+    /// syncs the clock.** Proven by asking for a deliberate 37-minute skew and
+    /// getting a clock that matched the host exactly: the action syncs to host
+    /// and discards `tzOffsetMinutes` entirely. Plain syncing is unaffected and
+    /// verified against a 2.5-year skew, but **`tzOffsetMinutes` has no effect
+    /// on this body** — don't reach for it to fix an EXIF timezone problem
+    /// here, it will look like it did nothing because it did.
+    ///
     /// Workaround: pass `tzOffsetMinutes` matching the camera's TZ-menu
     /// delta from host. Camera on PST (-8), host on PDT (-7) → pass +60. The
     /// write becomes `datetimeutc = host_utc + 60min`, the camera computes

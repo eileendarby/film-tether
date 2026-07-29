@@ -25,20 +25,13 @@ struct FilmTetherApp: App {
         WindowGroup("Film Tether") {
             MainView()
                 .environmentObject(model)
-                // No explicit minWidth on purpose. The toolbar's compact
-                // (icons-only) layout has a real intrinsic width, and with the
-                // horizontal ScrollView gone that width propagates up as the
-                // content's minimum — which `.windowResizability(.contentMinSize)`
-                // below turns into the window's minimum. So the window
-                // physically cannot be dragged narrow enough to hide a control,
-                // and it stays correct on its own as buttons are added later. A
-                // hardcoded number here would silently become wrong instead, and
-                // could sit *below* the bar's true width, which is exactly how
-                // buttons ended up clipped before.
-                //
-                // Height still wants ~820: the live-view pane needs 600+
-                // vertical pixels to be usable for focus checking.
-                .frame(minHeight: 820)
+                // No .frame minimum here at all. SwiftUI's own content-derived
+                // window minimum proved unreliable — it reported 1280 while the
+                // toolbar needed more, so the window could still be dragged
+                // narrow enough to clip controls. MainView measures the
+                // icons-only toolbar at runtime and pins NSWindow.contentMinSize
+                // to it instead (see WindowSizing.swift), which is both
+                // authoritative and self-maintaining as buttons are added.
                 .task {
                     // Hand the model to the delegate so its applicationWillTerminate
                     // hook can run a clean stop() before the process dies.
@@ -52,7 +45,11 @@ struct FilmTetherApp: App {
                 }
         }
         .windowStyle(.titleBar)
-        .windowResizability(.contentMinSize)
+        // .contentMinSize deliberately NOT used: it re-derives a minimum from
+        // SwiftUI's own (wrong) idea of the content size on every layout pass
+        // and clobbers the measured one set in WindowSizing.swift. .automatic
+        // leaves NSWindow.contentMinSize alone so our measurement sticks.
+        .windowResizability(.automatic)
         .commands {
             // App menu → About Film Tether: shows version + the build stamp that
             // used to live in the title bar.
@@ -181,7 +178,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             var report = ""
             for w in NSApp.windows where w.isVisible {
-                let line = "window frame=\(NSStringFromRect(w.frame)) minSize=\(NSStringFromSize(w.minSize)) contentMinSize=\(NSStringFromSize(w.contentMinSize))"
+                // Passive report only. An earlier version force-resized the
+                // window to prove the floor was enforced; that was useful once
+                // but it shouldn't jostle a real window on every debug launch.
+                let content = w.contentRect(forFrameRect: w.frame).size
+                let line = """
+                    contentMinSize=\(NSStringFromSize(w.contentMinSize)) \
+                    content=\(Int(content.width))x\(Int(content.height))
+                    """
                 layoutLog.info("\(line, privacy: .public)")
                 report += line + "\n"
             }

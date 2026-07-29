@@ -33,24 +33,38 @@ struct StatusFooter: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
-            if let cameraTime = model.snapshot.cameraDateTime {
-                let drift = abs(cameraTime.timeIntervalSinceNow)
+            // Reconstructed from the stored offset and re-rendered each second,
+            // so it ticks along with the system clock. Showing the raw stored
+            // timestamp instead left it frozen at whatever the last read said,
+            // which drifted visibly out of sync — during live view especially,
+            // where snapshot refreshes are suppressed to keep the USB pipe free.
+            if let offset = model.snapshot.cameraClockOffset {
+                let drift = abs(offset)
                 let isStale = drift > 300  // 5 min off = needs sync
-                Button {
-                    Task { await model.syncCameraClock() }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text("🕒")
-                            .font(.caption)
-                        Text(Self.cameraClockFormatter.string(from: cameraTime))
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Button {
+                        Task { await model.syncCameraClock() }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("🕒")
+                                .font(.caption)
+                            Text(Self.cameraClockFormatter.string(
+                                from: context.date.addingTimeInterval(offset)
+                            ))
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(isStale ? .red : .secondary)
+                        }
                     }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
+                // Measured at connect and at each sync, then advanced with the
+                // host clock. The camera only reports its clock once per
+                // session (the driver caches it), so this can't be re-read
+                // live — but the camera keeps time to about a second a day, so
+                // the reading stays trustworthy.
                 .help(isStale
-                      ? "Camera clock is off by \(Int(drift))s vs host, click to sync"
-                      : "Camera clock matches host, click to re-sync")
+                      ? "Camera clock was off by \(Int(drift))s vs host when last read, click to sync"
+                      : "Camera clock matches host (within \(Int(drift))s when last read), click to re-sync")
             }
             // FPS hidden by default; surface only when EOS_DEBUG=1 for diagnostics.
             if model.isLiveViewOn && ProcessInfo.processInfo.environment["EOS_DEBUG"] == "1" {

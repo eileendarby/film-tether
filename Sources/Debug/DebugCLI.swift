@@ -67,6 +67,9 @@ struct DebugCLI {
             let secs = Int(rest.first ?? "5") ?? 5
             try await runEvents(seconds: secs)
         case "clock":         try await runClock()
+        case "clock-under-lv": try await runClockUnderLiveView()
+        case "clock-watch":
+            try await runClockWatch(seconds: Int(rest.first ?? "20") ?? 20)
         case "sync-clock":    try await runSyncClock(local: true)
         case "sync-clock-utc": try await runSyncClock(local: false)
         case "test":          try await runTestSuite()
@@ -366,6 +369,103 @@ struct DebugCLI {
         print("camera=\(dt)")
         print("host=\(Date())")
         print("drift=\(Int(drift))s")
+    }
+
+    /// Does the camera's clock reading actually advance within a single
+    /// session, or is it cached at the value from the first read?
+    ///
+    /// The app holds one long-lived session, unlike the one-shot `clock`
+    /// command which opens a fresh session each time — so a value that is
+    /// cached per-session would look fine from the CLI and be frozen in the
+    /// app. Prints the reading against host time once a second; a healthy clock
+    /// keeps `delta` constant, a cached one makes it grow by one second per
+    /// second.
+    @CameraActor
+    static func runClockWatch(seconds: Int) async throws {
+        let sess = try await openSession(); defer { sess.close() }
+        let props = CameraProperties(session: sess)
+        print("elapsed  camera-reading        delta-vs-host")
+        let start = Date()
+        var first: Date?
+        while Date().timeIntervalSince(start) < TimeInterval(seconds) {
+            let snap = try? await props.snapshot()
+            if let cam = snap?.cameraDateTime {
+                if first == nil { first = cam }
+                let delta = cam.timeIntervalSinceNow
+                print(String(format: "%5.1fs   %@   %+.0fs",
+                             Date().timeIntervalSince(start),
+                             ISO8601DateFormatter().string(from: cam),
+                             delta))
+            } else {
+                print("   ?     (clock unreadable)")
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+        if let first, let last = (try? await props.snapshot())?.cameraDateTime {
+            let advanced = last.timeIntervalSince(first)
+            print(String(format: "\ncamera clock advanced %.0fs over %ds of wall time — %@",
+                         advanced, seconds,
+                         advanced < Double(seconds) / 2
+                            ? "STALE, cached per session"
+                            : "live"))
+        }
+    }
+
+    /// Does a clock-sync write survive an active live-view stream?
+    ///
+    /// Written to settle exactly that question: the footer's "click to re-sync"
+    /// appeared to do nothing during live view, and the suspicion was that the
+    /// 30 FPS preview traffic starves the write of the USB pipe. Runs the same
+    /// write twice — once competing with the stream, once with the frame loop
+    /// paused via `withPriority`, which is how every other camera write in the
+    /// app is issued.
+    @CameraActor
+    static func runClockUnderLiveView() async throws {
+        let sess = try await openSession(); defer { sess.close() }
+        let props = CameraProperties(session: sess)
+        let lv = LiveView(session: sess, properties: props)
+
+        // Skew the clock first so a successful write is visible in the readback
+        // rather than being indistinguishable from "already correct".
+        try await props.syncDateTimeToHostLocal(tzOffsetMinutes: -37)
+        let skewed = (try? await props.snapshot().cameraDateTime).flatMap { $0 }
+        print("skewed clock to \(skewed.map { Int($0.timeIntervalSinceNow) } ?? 0)s vs host")
+
+        try await lv.start()
+        try? await Task.sleep(nanoseconds: 2_000_000_000)  // let frames flow
+        print("live view up, frames streaming")
+
+        print("\n--- write WITHOUT priority (competing with the stream) ---")
+        var unprioritisedError: String?
+        do {
+            try await props.syncDateTimeToHostLocal()
+        } catch {
+            unprioritisedError = String(describing: error)
+        }
+        let afterPlain = (try? await props.snapshot().cameraDateTime).flatMap { $0 }
+        let driftPlain = afterPlain.map { abs(Int($0.timeIntervalSinceNow)) }
+        print("  error: \(unprioritisedError ?? "none")")
+        print("  drift after: \(driftPlain.map(String.init) ?? "?")s")
+
+        // Re-skew so the second attempt has something to correct.
+        try? await lv.withPriority { try await props.syncDateTimeToHostLocal(tzOffsetMinutes: -37) }
+
+        print("\n--- write WITH priority (frame loop paused) ---")
+        var prioritisedError: String?
+        do {
+            try await lv.withPriority { try await props.syncDateTimeToHostLocal() }
+        } catch {
+            prioritisedError = String(describing: error)
+        }
+        let afterPriority = (try? await props.snapshot().cameraDateTime).flatMap { $0 }
+        let driftPriority = afterPriority.map { abs(Int($0.timeIntervalSinceNow)) }
+        print("  error: \(prioritisedError ?? "none")")
+        print("  drift after: \(driftPriority.map(String.init) ?? "?")s")
+
+        try? await lv.stop()
+        // Leave the camera correct regardless of what the test proved.
+        try? await props.syncDateTimeToHostLocal()
+        print("\ncamera clock restored")
     }
 
     @CameraActor

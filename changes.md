@@ -2,6 +2,119 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-07-28 — Fix the window shrinking past its own controls, and a frozen clock readout
+
+Two bugs reported after the previous change.
+
+**The window could still be dragged too narrow, clipping the toolbar, and the
+interface was cut off the bottom.** Three separate causes, all now measured
+rather than estimated:
+
+1. `LiveViewPane` carried `.layoutPriority(1)`, so SwiftUI sized it *first* and
+   its `maxHeight: .infinity` swallowed the window; the toolbar and footer got
+   whatever was left, which at small heights was nothing. Priority is now
+   inverted — the chrome is sized first and the pane takes the remainder, which
+   is what "LiveView eats all remaining space" was supposed to mean.
+2. The toolbar's `.frame(maxWidth: .infinity, alignment: .leading)` made it
+   horizontally *flexible*, which discards the minimum width it would otherwise
+   report. Left alignment now comes from a trailing `Spacer(minLength: 0)`,
+   which fills the same space while leaving the minimum intact.
+3. SwiftUI's own content-derived window minimum was simply wrong, and this is
+   the part that actually mattered: it reported **1280pt** while the icons-only
+   toolbar genuinely needs **1514pt** — so the window could be dragged 234pt
+   narrower than its own controls. `.windowResizability(.contentMinSize)` also
+   re-applies that wrong value on later layout passes, overwriting anything set
+   once at startup.
+
+   `Sources/App/WindowSizing.swift` (new) fixes this by measuring the real
+   icons-only bar at runtime from an offscreen, hidden copy and pinning
+   `NSWindow.contentMinSize` to it, re-asserting as the layout settles and on
+   every resize. Measured rather than hardcoded so it stays correct as buttons
+   are added — a frozen constant is exactly how the 1280 got in. Verified by
+   forcing the window to 300×300 and watching it settle back at 1515×550.
+
+**"Click to re-sync" appeared to do nothing.** Three things were wrong on that
+path, though none reproduced on the bench — see the caveat below.
+
+- The write was the only camera write in `AppModel` not wrapped in
+  `withLVPriority`. Every sibling (`setISO`, `setShutter`, `triggerAutofocus`,
+  …) uses it because writes lose the USB pipe to the 30 FPS preview stream. It's
+  now wrapped like the rest. A `clock-under-lv` probe added to the debug CLI
+  showed the write actually surviving live view on this body either way, so this
+  was latent rather than the observed cause — but an unwrapped write is a bug
+  waiting on a slower body.
+- Failures were swallowed. A failed write and a disconnected camera both took
+  silent early-exit paths, so the button looked dead in exactly the case where
+  something needed saying. Both now surface in the footer, as does success.
+- The readout didn't refresh (see below), so even a *successful* sync left the
+  displayed time unchanged, which on its own looks like a button that does
+  nothing.
+
+**Caveat: the reported symptom was not reproduced directly.** Against the camera,
+the sync mechanism is provably fine — our sync corrected a deliberate 2.5-year
+skew to the exact second. The three fixes above are the plausible causes in the
+app layer; the new footer feedback means a recurrence will say what actually
+failed instead of being silent.
+
+**Found while testing: `cameraTZOffsetMinutes` has no effect on the R5.** The
+`datetimeutc` write is rejected on this body and the `syncdatetimeutc` action
+fallback is what really syncs the clock — and that action syncs to host and
+discards the offset. Proven by requesting a 37-minute skew and getting a clock
+that matched the host exactly. Plain syncing is unaffected. Documented on
+`syncDateTimeToHostLocal` so the setting isn't reached for to fix an EXIF
+timezone problem it cannot fix here.
+
+**The camera clock readout was wrong, and ticked forward then jumped back.**
+Reported precisely: opened at 08:30:04, counted up to 08:30:14, snapped back to
+08:30:04, repeatedly — a 10-second sawtooth, matching the idle snapshot-refresh
+interval.
+
+**Root cause: the ptp2 driver caches the camera's clock for the life of the
+session.** A `clock-watch` probe added to the debug CLI reads it once a second
+within a single session: the value advanced **0 seconds over 12 seconds** of
+wall time, with the host delta growing 1s per second. The app holds one
+long-lived session, so every read after the first returns the connect-time
+value; the one-shot `clock` CLI command looked healthy only because each
+invocation opens a fresh session. That cached reading is also why the displayed
+time never matched the system clock — it was frozen at whenever the app
+connected.
+
+An earlier attempt at this made it worse rather than better. Storing the
+camera-vs-host *offset* and rebuilding `now + offset` in a one-second
+`TimelineView` is the right shape — both clocks tick in real time, so the offset
+is the stable quantity — but recomputing that offset from a **cached** reading
+made it one second more negative every second, which is precisely what produced
+the sawtooth.
+
+The fix is to only recompute the offset from a reading that can be *proven*
+fresh, i.e. one that differs from the previous read; an identical value means
+we're looking at the cache and the existing offset is the better estimate. After
+a sync the offset is asserted to zero rather than read back, since a successful
+sync sets the camera to host time by definition and there's no guarantee the
+cache reflects a write just made. The camera's own clock is accurate — measured
+~1s over 14 hours — so an offset taken once at connect stays trustworthy.
+
+Verified by dumping the offset sequence across refreshes: the raw reading sits
+frozen at the connect-time value as expected, while the offset now holds steady
+instead of falling by the refresh interval each time.
+
+- `Sources/App/MainView.swift`, `WindowSizing.swift`, `FilmTetherApp.swift` —
+  the layout fixes above.
+- `Sources/App/AppModel.swift`, `StatusFooter.swift` — offset-based clock, plus
+  the priority wrap and visible success/failure feedback on sync.
+- `Sources/Camera/CameraProperties.swift` — documented the R5's rejected
+  `datetimeutc` write and the resulting dead `tzOffsetMinutes`.
+- `Sources/Debug/DebugCLI.swift` — two probes, both of which overturned a
+  plausible-sounding theory instead of letting it stand:
+  `clock-under-lv` skews the clock then syncs with and without the frame loop
+  paused, which disproved USB contention; `clock-watch` polls the clock inside
+  one session, which is what exposed the per-session cache. Neither bug would
+  have been found by reading the code — the app-versus-CLI session lifetime is
+  the entire difference.
+- `Sources/App/FilmTetherApp.swift` — the `EOS_DEBUG=1` layout report now also
+  writes to a temp file, since a GUI app has no useful stderr and unified
+  logging wasn't readable from the shell. It's what caught the 1280-vs-1514 gap.
+
 ## 2026-07-28 — Negative inversion, black-and-white preview, click-to-set white balance
 
 Roadmap items 5 and 8 plus preview inversion, built together because they're
