@@ -34,6 +34,7 @@ struct ExposureBar: View {
                 isDisabled: !writableForCurrentMode("aperture"),
                 onPick: { raw in Task { await model.setAperture(raw) } }
             )
+            whiteBalancePicker()
             kelvinStepper()
             imageFormatPicker()
             Divider().frame(height: 28)
@@ -139,7 +140,7 @@ struct ExposureBar: View {
         }
         .help(model.previewAdjustments.invert
               ? "Unavailable while the preview is inverted: with a positive on screen the film base is the darkest part of the picture, not the brightest, which invites clicking the wrong spot. Switch to Negative to sample."
-              : "Click here, then click the unexposed film base in the preview to neutralise its colour cast. Corrects both blue/amber and green/magenta, which the camera's Kelvin-only white balance can't. Reset it from the Preview menu.")
+              : "Click here, then click the unexposed film base in the preview to neutralise its colour cast. The blue/amber half is sent to the camera as a colour temperature, so it reaches the captured RAW; the green/magenta half, which a Kelvin control can't express, is corrected on the preview. Click again to refine — each sample corrects what's left. Clear the preview part from the Preview menu.")
         .disabled(!model.canPickWhiteBalance)
     }
 
@@ -275,10 +276,32 @@ struct ExposureBar: View {
         .frame(width: 60 + 6)
     }
 
+    /// White-balance **mode**. Without this the app could set a colour
+    /// temperature but never the mode that makes it apply, so a body sitting in
+    /// a PC-set custom white balance was stuck there — every frame heavily
+    /// cast, with nothing in the UI to show why or to change it.
+    @ViewBuilder
+    private func whiteBalancePicker() -> some View {
+        menuPicker(
+            label: "WB Mode",
+            currentLabel: model.snapshot.whiteBalanceLabel,
+            choices: model.whiteBalanceChoices,
+            propName: "whitebalance",
+            widthHint: 118,    // "Custom Whitebalance: PC-1" truncates; tooltip has it
+            isDisabled: model.whiteBalanceChoices.isEmpty,
+            onPick: { raw in Task { await model.setWhiteBalanceMode(raw) } }
+        )
+    }
+
     @ViewBuilder
     private func kelvinStepper() -> some View {
+        // Only meaningful in Color Temperature mode; every other mode ignores
+        // the value outright. Greyed out rather than silently inert, and
+        // changing the temperature also switches the body into the mode so the
+        // number means what it says.
+        let active = model.kelvinIsActive
         VStack(alignment: .leading, spacing: 1) {
-            Text("White Balance").font(.caption2).foregroundStyle(.secondary)
+            Text("Temperature").font(.caption2).foregroundStyle(.secondary)
             HStack(spacing: 6) {
                 Text(model.snapshot.kelvinLabel)
                     .font(.system(.body, design: .monospaced))
@@ -290,7 +313,10 @@ struct ExposureBar: View {
                 ), in: 2500...10000, step: 100)
                     .labelsHidden()
             }
-            .help("Color temperature (active when WB mode is Color Temperature)")
+            .opacity(active ? 1.0 : 0.5)
+            .help(active
+                  ? "Colour temperature the body is using."
+                  : "The body is in \(model.snapshot.whiteBalanceLabel) mode, which ignores this value. Changing it switches the body to Color Temperature so it takes effect.")
         }
     }
 

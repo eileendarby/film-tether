@@ -1,6 +1,9 @@
 import Foundation
 import Camera
 import CGPhoto2
+import CoreGraphics
+import ImageIO
+import Scan
 
 /// FilmTetherDebug, headless CLI for exercising the Camera module without the
 /// SwiftUI app. Critical for autonomous testing over SSH: the GUI app needs a
@@ -66,6 +69,10 @@ struct DebugCLI {
         case "events":
             let secs = Int(rest.first ?? "5") ?? 5
             try await runEvents(seconds: secs)
+        case "set-kelvin":
+            guard let k = rest.first.flatMap(Int.init) else { fail("set-kelvin needs KELVIN") }
+            try await runSetKelvin(k)
+        case "wb-probe":      try await runWhiteBalanceProbe()
         case "clock":         try await runClock()
         case "clock-under-lv": try await runClockUnderLiveView()
         case "clock-watch":
@@ -371,6 +378,117 @@ struct DebugCLI {
         print("drift=\(Int(drift))s")
     }
 
+    /// Exercise the real `setWhiteBalanceKelvin` path, mode switch included.
+    ///
+    /// `set-widget colortemperature N` deliberately won't do: that writes the
+    /// raw widget and skips the mode handling, which is the very thing that was
+    /// broken — the app used to set a temperature the body then ignored.
+    @CameraActor
+    static func runSetKelvin(_ k: Int) async throws {
+        let sess = try await openSession(); defer { sess.close() }
+        let props = CameraProperties(session: sess)
+        let beforeMode = (try? await props.whiteBalance()) ?? "?"
+        let beforeK = (try? await props.getString("colortemperature")) ?? "?"
+        print("before: mode=\(beforeMode) colortemperature=\(beforeK)")
+        try await props.setWhiteBalanceKelvin(k)
+        let afterMode = (try? await props.whiteBalance()) ?? "?"
+        let afterK = (try? await props.getString("colortemperature")) ?? "?"
+        print("after:  mode=\(afterMode) colortemperature=\(afterK)")
+        let modeOK = afterMode.caseInsensitiveCompare(
+            CameraProperties.colorTemperatureMode) == .orderedSame
+        print(modeOK
+              ? "OK mode is Color Temperature, so the value applies"
+              : "FAIL mode is still \(afterMode) — the value will be ignored")
+    }
+
+    /// Measure how this body's rendered live-view frames respond to a change in
+    /// `colortemperature`, so the eyedropper's estimate rests on a measurement
+    /// rather than on textbook blackbody physics.
+    ///
+    /// The theory says `ln(R/B)` should be linear in `1/T` with a slope of about
+    /// 7993 K (Wien, at 450/600 nm). What actually comes off the camera is a
+    /// rendered JPEG — tone curve, saturation, picture style — so the real slope
+    /// is the thing worth knowing. The whatever-is-under-the-lens cast is a
+    /// constant offset in log space and drops out of a slope fit, so this can be
+    /// run with a negative in place; it does not need a grey card.
+    ///
+    /// Restores the body's original mode and temperature on the way out.
+    @CameraActor
+    static func runWhiteBalanceProbe() async throws {
+        let sess = try await openSession(); defer { sess.close() }
+        let props = CameraProperties(session: sess)
+
+        let originalMode = (try? await props.whiteBalance()) ?? ""
+        let originalK = (try? await props.getString("colortemperature")) ?? ""
+        print("before: mode=\(originalMode) colortemperature=\(originalK)")
+
+        let lv = LiveView(session: sess, properties: props)
+        try await lv.start()
+        defer { Task { @CameraActor in try? await lv.stop() } }
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+
+        let temperatures = [2500, 3200, 4000, 5000, 6500, 8000, 10000]
+        var points: [(inverseT: Double, logRatio: Double)] = []
+
+        print("\n     K    R      G      B       ln(R/B)")
+        for k in temperatures {
+            try await props.setWhiteBalanceKelvin(k)
+            // The body needs a moment to render frames under the new setting,
+            // and the first frames after a property write are often the old
+            // ones still in flight — hence the sleep, then a discarded frame.
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            _ = try? await lv.fetchOnePreview()
+            guard let data = try? await lv.fetchOnePreview(),
+                  let src = CGImageSourceCreateWithData(data as CFData, nil),
+                  let cg = CGImageSourceCreateImageAtIndex(src, 0, nil),
+                  let s = PixelSampler.averageColor(
+                    in: cg, atNormalized: CGPoint(x: 0.5, y: 0.5), patchSize: 400)
+            else {
+                print(String(format: "%6d    (no frame)", k))
+                continue
+            }
+            let r = WhiteBalanceEstimate.linearize(s.red)
+            let b = WhiteBalanceEstimate.linearize(s.blue)
+            guard r > 0, b > 0 else {
+                print(String(format: "%6d    (channel empty: R=%.3f B=%.3f)", k, s.red, s.blue))
+                continue
+            }
+            let logRatio = Foundation.log(r / b)
+            points.append((1.0 / Double(k), logRatio))
+            print(String(format: "%6d  %.3f  %.3f  %.3f   %+.4f",
+                         k, s.red, s.green, s.blue, logRatio))
+        }
+
+        // Restore, best effort — leaving the body somewhere it wasn't would be
+        // rude, and would silently change the next capture.
+        if let k = Int(originalK) { try? await props.setWhiteBalanceKelvin(k) }
+        if !originalMode.isEmpty { try? await props.setWhiteBalance(originalMode) }
+
+        guard points.count >= 3 else {
+            print("\nnot enough usable points to fit")
+            return
+        }
+        // Least squares on ln(R/B) = slope·(1/T) + intercept. The slope is
+        // `WhiteBalanceEstimate.responseConstant`.
+        let n = Double(points.count)
+        let sx = points.reduce(0) { $0 + $1.inverseT }
+        let sy = points.reduce(0) { $0 + $1.logRatio }
+        let sxx = points.reduce(0) { $0 + $1.inverseT * $1.inverseT }
+        let sxy = points.reduce(0) { $0 + $1.inverseT * $1.logRatio }
+        let syy = points.reduce(0) { $0 + $1.logRatio * $1.logRatio }
+        let denom = n * sxx - sx * sx
+        guard denom != 0 else { print("\ndegenerate fit"); return }
+        let slope = (n * sxy - sx * sy) / denom
+        let r2num = n * sxy - sx * sy
+        let r2 = (r2num * r2num) / (denom * (n * syy - sy * sy))
+
+        print(String(format: "\nfit: slope = %.1f K   R² = %.4f   (n = %d)",
+                     slope, r2, points.count))
+        print(String(format: "currently compiled in: %.1f K",
+                     WhiteBalanceEstimate.responseConstant))
+        print("Wien at 450/600nm would be 7993 K")
+    }
+
     /// Does the camera's clock reading actually advance within a single
     /// session, or is it cached at the value from the first read?
     ///
@@ -674,6 +792,8 @@ struct DebugCLI {
           mf STEP                 Manual focus: near-tiny|near-small|near-large|far-tiny|far-small|far-large
           meter [SECONDS]         LV + drain shutterspeed events (default 8s)
           events [SECONDS]        LV + dump ALL events (default 5s)
+          set-kelvin K            Set WB temperature the way the app does (mode + value)
+          wb-probe                Sweep colour temperature under LV, fit the body's response
           clock                   Read camera clock + host drift
           sync-clock              Sync camera to host LOCAL wall clock
           sync-clock-utc          Sync camera to host UTC (legacy)

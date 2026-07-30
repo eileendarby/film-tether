@@ -246,8 +246,44 @@ public final class CameraProperties {
         return Int(s) ?? 0
     }
 
+    /// The white-balance mode in which `colortemperature` is the value the body
+    /// actually uses. Any other mode ignores it.
+    /// `nonisolated` so the UI can compare against it without hopping to the
+    /// camera actor — it's a constant string, not camera state.
+    public nonisolated static let colorTemperatureMode = "Color Temperature"
+
+    /// Set the body's colour temperature, **putting it into Color Temperature
+    /// mode first** so the value is the one actually applied.
+    ///
+    /// Writing `colortemperature` on its own is close to useless and actively
+    /// harmful: the body keeps whatever white-balance mode it was in and quietly
+    /// derives its own temperature, so the number the app shows bears no
+    /// relation to the exposure. Observed on the R5 — a capture whose EXIF
+    /// recorded `Color Temperature: 5200` while `Color Temp As Shot` was 2639,
+    /// with the mode left on `Custom Whitebalance: PC-1`. Roughly a 2600K error
+    /// against a daylight light table, which is a heavy blue cast on every
+    /// frame, and there was no way to see or correct it from the app.
+    ///
+    /// Best-effort on the mode: bodies that don't expose the choice still get
+    /// the temperature written, which is no worse than before.
     public func setWhiteBalanceKelvin(_ k: Int) async throws {
+        try? await ensureColorTemperatureMode()
         try await setString("colortemperature", value: "\(k)")
+    }
+
+    /// Switch to Color Temperature white balance if the body offers it and
+    /// isn't already there. Skipped silently when the choice doesn't exist.
+    private func ensureColorTemperatureMode() async throws {
+        let available = (try? await choices(for: "whitebalance")) ?? []
+        guard let target = available.first(where: {
+            $0.caseInsensitiveCompare(Self.colorTemperatureMode) == .orderedSame
+        }) else { return }
+        let current = try? await getString("whitebalance")
+        guard current != target else { return }
+        try await setString("whitebalance", value: target)
+        CameraLog.properties.info(
+            "whitebalance → \(target, privacy: .public) (was \(current ?? "?", privacy: .public)) so colortemperature applies"
+        )
     }
 
     /// Read the body's current metering mode. Values on the 7D:

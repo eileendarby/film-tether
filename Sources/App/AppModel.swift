@@ -88,6 +88,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var shutterChoices: [String] = []
     @Published private(set) var apertureChoices: [String] = []
     @Published private(set) var imageFormatChoices: [String] = []
+    @Published private(set) var whiteBalanceChoices: [String] = []
     @Published private(set) var meteringModeChoices: [String] = []
     @Published private(set) var permissionsState: PermissionsState = .init()
     /// Diagnostic: incremented on every successful snapshot refresh. Used to
@@ -239,15 +240,31 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Drop the host's tint correction. The camera's own temperature is left
+    /// where it is — it's a camera setting, changed from the toolbar like any
+    /// other, and silently rewinding it here would be a surprise.
     func resetWhiteBalance() {
         previewAdjustments.whiteBalance = nil
         isPickingWhiteBalance = false
-        showNotice("White balance reset to as-shot")
-        appLog.info("white balance reset")
+        showNotice("Preview tint correction cleared — camera temperature unchanged")
+        appLog.info("white balance tint reset")
     }
 
     /// Sample the frame at `point` (normalized, y-down, unrotated sensor space)
     /// and set the white balance that renders it neutral.
+    ///
+    /// The work is split between the camera and the host, because neither can do
+    /// the whole job. The **body** takes the blue↔amber axis as a colour
+    /// temperature — that's the half that matters, since it's the only half that
+    /// reaches the RAW the scan actually keeps. The **host** takes the
+    /// green↔magenta residue, which a Kelvin control cannot express at all and
+    /// which a film base has plenty of. Splitting them this way also stops the
+    /// two corrections from both attacking the blue/amber cast and overshooting.
+    ///
+    /// The temperature is an estimate against a measured model of this body (see
+    /// `WhiteBalanceEstimate`), so it lands close rather than exactly. Clicking
+    /// the same spot again re-measures from wherever the body now is and closes
+    /// the remaining gap — repeated clicks converge.
     func sampleWhiteBalance(atSensor point: CGPoint) {
         isPickingWhiteBalance = false
         guard let jpeg = lastUnadjustedFrame else {
@@ -258,16 +275,45 @@ final class AppModel: ObservableObject {
             showNotice("Couldn't read that pixel")
             return
         }
-        guard let gains = ChannelGains.neutralizing(red: s.red, green: s.green, blue: s.blue) else {
-            // Refusing beats applying a wild correction from a near-black
-            // sample, but the user needs to know why nothing happened.
+        // Refusing beats applying a wild correction from a near-black sample,
+        // but the user needs to know why nothing happened.
+        guard ChannelGains.neutralizing(red: s.red, green: s.green, blue: s.blue) != nil else {
             showNotice("That spot is too dark to balance from — pick a brighter one")
             return
         }
-        previewAdjustments.whiteBalance = gains
-        appLog.info("white balance set: r=\(gains.red, privacy: .public) g=\(gains.green, privacy: .public) b=\(gains.blue, privacy: .public)")
-        showNotice(String(format: "White balance set (R %.2f  G %.2f  B %.2f)",
-                          gains.red, gains.green, gains.blue))
+
+        // The host's share: tint only. Applied immediately, since it costs
+        // nothing and shows up on the very next frame.
+        previewAdjustments.whiteBalance =
+            WhiteBalanceEstimate.tintGains(red: s.red, green: s.green, blue: s.blue)
+
+        // The camera's share: a colour temperature. Needs the body's current
+        // setting, because the estimate is a correction to it — without a known
+        // starting point there's nothing to correct *from*.
+        guard let current = snapshot.whiteBalanceKelvin,
+              let target = WhiteBalanceEstimate.kelvin(
+                fromRed: s.red, green: s.green, blue: s.blue, currentKelvin: current)
+        else {
+            showNotice("Preview balanced — connect the camera to set its temperature too")
+            appLog.info("white balance: host-only, no camera temperature to correct from")
+            return
+        }
+        appLog.info("white balance sample r=\(s.red, privacy: .public) g=\(s.green, privacy: .public) b=\(s.blue, privacy: .public) → \(current, privacy: .public)K → \(target, privacy: .public)K")
+        // Coming from any other mode, `current` is the temperature widget's
+        // value rather than what the body was actually applying, so this first
+        // estimate is only a starting point. Setting it also switches the body
+        // into Color Temperature, which makes every later click exact.
+        guard kelvinIsActive else {
+            showNotice("White balance → \(target)K — click again to refine")
+            Task { await setWhiteBalanceKelvin(target) }
+            return
+        }
+        guard target != current else {
+            showNotice("Already balanced at \(current)K")
+            return
+        }
+        showNotice("White balance → \(target)K")
+        Task { await setWhiteBalanceKelvin(target) }
     }
 
     private func showNotice(_ text: String) {
@@ -1089,6 +1135,29 @@ final class AppModel: ObservableObject {
         await refreshSnapshot()
     }
 
+    /// True when the body's white balance is the mode that actually uses the
+    /// Kelvin value, so the stepper can be disabled rather than silently doing
+    /// nothing the rest of the time.
+    var kelvinIsActive: Bool {
+        snapshot.whiteBalance.caseInsensitiveCompare(
+            CameraProperties.colorTemperatureMode
+        ) == .orderedSame
+    }
+
+    func setWhiteBalanceMode(_ value: String) async {
+        guard let p = properties else { return }
+        await withLVPriority {
+            do {
+                try await p.setWhiteBalance(value)
+                self.clearTransientErrorIfStreamingReady()
+            }
+            catch let err as CameraError { self.ui = .error(message: err.localizedDescription, hint: nil) }
+            catch { self.ui = .error(message: "\(error)", hint: nil) }
+        }
+        await refreshSnapshot()
+        appLog.info("white balance mode → \(value, privacy: .public)")
+    }
+
     func setWhiteBalanceKelvin(_ k: Int) async {
         guard let p = properties else { return }
         await withLVPriority {
@@ -1245,6 +1314,7 @@ final class AppModel: ObservableObject {
         self.shutterChoices = cs.shutter
         self.apertureChoices = cs.aperture
         self.imageFormatChoices = cs.imageFormat
+        self.whiteBalanceChoices = cs.whiteBalance
         self.meteringModeChoices = cs.meteringMode
         appLog.info("choices: iso=\(cs.iso.count, privacy: .public) shutter=\(cs.shutter.count, privacy: .public) aperture=\(cs.aperture.count, privacy: .public) imageFormat=\(cs.imageFormat.count, privacy: .public) meteringMode=\(cs.meteringMode.count, privacy: .public)")
     }

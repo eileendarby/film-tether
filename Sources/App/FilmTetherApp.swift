@@ -107,11 +107,11 @@ struct FilmTetherApp: App {
                 }
                 .disabled(!model.canPickWhiteBalance)
                 .help("Then click the unexposed film base in the preview to neutralise its cast. Unavailable while the preview is inverted, where the base is the darkest part of the picture rather than the brightest.")
-                Button("Reset White Balance") {
+                Button("Clear Preview Tint Correction") {
                     model.resetWhiteBalance()
                 }
                 .disabled(model.previewAdjustments.whiteBalance == nil)
-                .help("Go back to the camera's as-shot colour.")
+                .help("Drop the green/magenta correction the eyedropper applied to the preview. The camera's own colour temperature is left alone — change that from the toolbar.")
                 Divider()
                 Button(model.focusPeakingEnabled ? "Disable Focus Peaking" : "Enable Focus Peaking") {
                     model.focusPeakingEnabled.toggle()

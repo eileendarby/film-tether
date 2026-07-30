@@ -69,7 +69,7 @@ let package = Package(
         // the OS window server, this doesn't.
         .executableTarget(
             name: "FilmTetherDebug",
-            dependencies: ["Camera"],
+            dependencies: ["Camera", "Scan"],
             path: "Sources/Debug",
             swiftSettings: [
                 .unsafeFlags(["-parse-as-library"]),

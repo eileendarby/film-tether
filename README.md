@@ -17,7 +17,7 @@ The handful of things that actually matter for the way I use it.
 - **Rotate the preview.** Turn the live view 90° at a time (Cmd-R, or Cmd-Shift-R the other way) so the negative reads right-way-up however the copy stand is set up. Display only — the camera and the saved files are never touched — and the setting is remembered.
 - **Positive preview.** Cmd-I inverts the live view so a negative shows as the positive image it will become, instead of making you judge framing and focus on an inverted picture. The captured RAW is still the negative.
 - **Black-and-white preview.** Cmd-B shows the preview in mono. Raw pixels off a B&W negative carry no useful colour, so it's easier to judge exposure and focus without it.
-- **Click-to-set white balance.** Arm the eyedropper, click the unexposed film base, and its colour cast is neutralised. It corrects blue/amber *and* green/magenta, which the camera's own Kelvin-only white balance can't do.
+- **Click-to-set white balance.** Arm the eyedropper, click the unexposed film base, and its colour cast is neutralised. The blue/amber half is sent to the camera as a colour temperature, so it lands in the captured RAW; the green/magenta half, which a Kelvin control can't express, is corrected on the preview. Click again to refine.
 - **Focus check.** Hold Shift to punch in using the camera's sensor and confirm your focus is sharp.
 - **Focus control.** Keyboard shortcuts for stepping focus, when the conditions are right (lens set to AF, live view on).
 - **Focus peaking.** An adjustable overlay that attempts to highlight what's in focus (far from perfect).

@@ -2,6 +2,135 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-07-30 — The eyedropper now sets the camera's white balance, not just the preview's
+
+Clicking the film base neutralised the *preview* and nothing else. The body kept
+whatever temperature it had, so every RAW written during the session still
+carried the full cast — which is the file the scan actually keeps.
+
+The correction is now split between the two, because neither can do the whole
+job:
+
+- The **camera** takes the blue↔amber axis, as a colour temperature. That's the
+  half that reaches the captured RAW.
+- The **host** takes the green↔magenta residue, which a Kelvin control cannot
+  express at all and which a film base has plenty of.
+
+Splitting them also stops both from correcting the same axis and overshooting
+by double, which is what applying the full `ChannelGains` alongside a camera-side
+change would have done.
+
+**Measuring the response instead of assuming it.** Converting a sampled colour
+into a temperature needs to know how this body's rendered frames respond to a
+change in `colortemperature`. Wien's approximation says `ln(R/B)` is linear in
+`1/T` with a slope near 7993 K at 450/600 nm — but the camera hands over a
+rendered JPEG, through a tone curve and a saturation boost, not radiance. So it
+was measured: the new `wb-probe` debug command sweeps the temperature across the
+body's whole range under live view, samples each frame, and fits the line.
+
+On the R5, seven points from 2500 K to 10000 K: **slope 13272.8 K, R² = 0.9954**.
+The response is two-thirds stronger than the physics alone predicts, so the
+textbook constant would have overshot every click by that much. The fit's
+quality also confirms the model shape is right — it's the constant that needed
+measuring, not the equation.
+
+Because the estimate is a *correction* relative to the current setting, whatever
+the film base, the picture style and the sensor contribute cancels out of the
+difference — the probe doesn't need a grey card, and the eyedropper converges on
+repeated clicks.
+
+**New:**
+
+- `Sources/Scan/WhiteBalanceEstimate.swift` — the model: `kelvin(fromRed:…)`,
+  `tintGains`, sRGB linearisation, and clamping/snapping to the body's real
+  range (2500–10000 in hundreds, confirmed against the R5's 76 choices).
+- `Tests/ScanTests/WhiteBalanceEstimateTests.swift` — 17 tests: direction,
+  magnitude against the measured constant, that linearisation is actually
+  applied, that tint gains leave the blue/amber axis alone and preserve
+  brightness, and the refusals.
+- `Sources/Debug/DebugCLI.swift` — `wb-probe`, which restores the body's
+  original mode and temperature on the way out.
+
+**Changed:**
+
+- `Sources/App/AppModel.swift` — `sampleWhiteBalance` now estimates a
+  temperature and writes it to the body, keeping only the tint on the host.
+  `resetWhiteBalance` clears the host's part only; the camera's temperature is a
+  camera setting and rewinding it silently would be a surprise.
+- `Sources/App/ExposureBar.swift`, `Sources/App/FilmTetherApp.swift` — help text
+  and the menu item renamed to say what each half actually does.
+
+## 2026-07-29 — Fix Film Tether putting the camera into an uncorrectable blue cast
+
+Every capture was coming out heavily blue, and it was this app's doing.
+
+**What was wrong.** `setWhiteBalanceKelvin` wrote the `colortemperature` widget
+and nothing else. It never set the white-balance *mode*, and every mode except
+`Color Temperature` ignores that value outright — so the body kept whatever mode
+it was in and derived its own temperature, while the app displayed a number that
+had no bearing on the exposure.
+
+The evidence from a sample CR3: EXIF records `Color Temperature: 5200` while
+`Color Temp As Shot` was **2639**, with the mode left on
+`Custom Whitebalance: PC-1`. `WB RGGB Levels As Shot` of
+`1135 1024 1024 3013` shows the blue channel being multiplied nearly 3× —
+roughly a 2600K error against a daylight light table, on every frame.
+
+**Why it couldn't be undone from the app.** Film Tether had a Kelvin stepper but
+**no white-balance mode control at all**. Once the body was in a PC-set custom
+white balance there was nothing in the UI to show that, and nothing to change it
+— the Kelvin stepper looked live but was inert.
+
+**Fixes:**
+
+- `Sources/Camera/CameraProperties.swift` — `setWhiteBalanceKelvin` now switches
+  the body into Color Temperature mode before writing the value, so the number
+  is the one actually applied. Best-effort on the mode: bodies not offering the
+  choice still get the temperature written, which is no worse than before.
+- `Sources/App/ExposureBar.swift` — a **WB Mode** picker, so Auto / Daylight /
+  Color Temperature / a custom PC white balance are all visible and selectable,
+  and a body stuck in PC-1 can be recovered without touching the camera.
+- `Sources/App/ExposureBar.swift` — the temperature stepper greys out when the
+  mode ignores it, with a tooltip naming the active mode, instead of appearing
+  live while doing nothing.
+- `Sources/App/AppModel.swift` — publishes `whiteBalanceChoices` (the choice
+  list was already being fetched and then discarded) and adds
+  `setWhiteBalanceMode` plus `kelvinIsActive`.
+
+**Verified against the camera.** The body was found sitting in
+`Custom Whitebalance: PC-1` with `colortemperature=2500` — exactly the floor of
+the app's stepper range, which is how it got there. After the fix:
+
+```
+before: mode=Custom Whitebalance: PC-1  colortemperature=2500
+after:  mode=Color Temperature          colortemperature=4500
+```
+
+and a capture taken immediately afterwards records
+`White Balance: Manual Temperature (Kelvin)` with `Color Temp As Shot: 4504`.
+Measuring the mean channels of the decoded frames:
+
+| | R | G | B | B−R |
+| --- | --- | --- | --- | --- |
+| the reported blue sample | 0.295 | 0.486 | 0.712 | **+0.417** |
+| after the fix | 0.575 | 0.567 | 0.532 | **−0.043** |
+
+Confirmed visually too: the new capture renders as clean neutral monochrome.
+The camera is left in Color Temperature mode at 4500K, which is roughly what the
+light table needs — derived from the camera's own `Measured RGGB` in the sample,
+interpolated against its reference WB tables.
+
+- `Sources/Debug/DebugCLI.swift` — `set-kelvin K` exercises the real
+  `setWhiteBalanceKelvin` path, mode switch included, and reports whether the
+  mode actually ended up somewhere the value applies. `set-widget
+  colortemperature N` deliberately won't do for this: it writes the raw widget
+  and skips the mode handling, which was the broken part.
+
+**Incidental finding, relevant to roadmap item 6 (CR3 support):** macOS ImageIO
+decodes these CR3 files natively — `CGImageSourceCreateThumbnailAtIndex` on the
+R5's output produced a correct image with no third-party code. The Canon CR3
+spec may not need to be touched at all.
+
 ## 2026-07-28 — Fix the window shrinking past its own controls, and a frozen clock readout
 
 Two bugs reported after the previous change.
