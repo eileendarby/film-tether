@@ -2,6 +2,65 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-07-30 — Fix the menu bar: an unusable View menu, and blank space in several others
+
+The View menu opened, closed itself immediately, and couldn't be reopened.
+Several other menus had blank space at the bottom.
+
+**Measured rather than guessed.** SwiftUI's `commands` builder says what to
+*add*; what AppKit ends up with is that merged with the standard macOS menus,
+and the merge is not predictable from the source. So the app now dumps the
+finished menu bar under `EOS_DEBUG=1`
+(`FilmTetherApp.describeMenus`, written to `$TMPDIR/filmtether-menus.txt`),
+flagging empty menus, doubled separators and separators at either end. That
+turned four vague symptoms into an exact list:
+
+```
+File  [14 items]          ← every camera AND preview command
+    ---------
+    ---------  ⚠️ doubled
+Edit  [13 items]          ← "Start Dictation…" ×2, "Emoji & Symbols" ×3
+View  [0 items]  ⚠️ EMPTY — opens then closes
+Help  [2 items]           ← "Toggle Sidebar", for a sidebar that doesn't exist
+```
+
+The empty View menu was the whole of that first symptom: a macOS menu with no
+items opens and dismisses itself, and can't be reopened.
+
+**Fixes:**
+
+- `Sources/App/FilmTetherApp.swift` — everything that changes how the preview
+  *looks* (rotation, invert, B&W, white balance, peaking, the zoom-area overlay)
+  moved out of File and into View, via the `.toolbar` placement. File keeps the
+  camera actions: Capture, Live View, Sync Camera Clock.
+- `Sources/App/MenuBarTidy.swift` — an AppKit pass for the debris SwiftUI gives
+  no control over: separators with nothing between them, duplicated system
+  items, commands for features the app doesn't have, and empty menus.
+
+  It re-runs on every menu-bar click rather than once at launch, because SwiftUI
+  rebuilds menus whenever the state behind a title changes — and several titles
+  here are state-dependent ("Hide/Show Zoom-Area Overlay", the current rotation
+  angle) — so a one-shot tidy would be undone by the first rotation.
+- `Sources/App/MenuBarTidy.swift` — window tabbing switched off
+  (`NSWindow.allowsAutomaticWindowTabbing = false`). This is a single-window app
+  tied to one camera over one USB connection, so a second tab could only ever
+  show the same live view; "Hide Tab Bar" and "Show All Tabs" had no meaning in
+  View, and the Window menu grew from 4 items to 16.
+
+  It has to be switched off at the source rather than filtered out by the tidy,
+  because AppKit inserts those items *while the menu is displaying* — after
+  every hook available. Establishing that took four attempts, each disproved by
+  leaving tabbing deliberately enabled and checking whether the report noticed:
+  a dump at launch (after `update()` on every submenu), on the menu bar's
+  `didBeginTracking`, and on each submenu's `didBeginTracking` all reported a
+  clean View menu. Only `didEndTracking` sees them. Three of those would have
+  been reported as "verified" on the strength of a probe that could not detect
+  the problem.
+
+Verified by driving a real menu-bar click via System Events, since a report with
+no menu ever opened in front of it proves nothing: no warnings left, File down
+to 5 items, Edit to 10, View 10 (including Enter Full Screen), Window 4, Help 1.
+
 ## 2026-07-30 — Scroll and middle-drag to pan the zoomed preview
 
 Reaching another part of the negative meant travelling to the navigator box

@@ -74,6 +74,12 @@ struct FilmTetherApp: App {
                     Task { await model.syncCameraClockLocal() }
                 }
                 .help("Push the host's LOCAL wall time to the camera so saved RAW EXIF DateTimeOriginal matches what you see in Finder")
+            }
+            // Everything that changes how the preview *looks* belongs in View,
+            // not File. `.toolbar` is the placement that lands there; the View
+            // menu is otherwise empty, and an empty menu on macOS opens and
+            // instantly closes again, which is what made it look broken.
+            CommandGroup(replacing: .toolbar) {
                 Button(model.showMeteringOverlay ? "Hide Zoom-Area Overlay" : "Show Zoom-Area Overlay") {
                     model.showMeteringOverlay.toggle()
                 }
@@ -124,6 +130,9 @@ struct FilmTetherApp: App {
                 .keyboardShortcut("p", modifiers: [.command, .shift])
                 .help("Cycle through cyan / magenta / yellow / white / lime. Cmd-Shift-P. Useful if the current color blends into the scene.")
             }
+            // There is no sidebar. Left alone, SwiftUI's "Toggle Sidebar" lands
+            // in the Help menu of all places, where it does nothing.
+            CommandGroup(replacing: .sidebar) { }
         }
 
         Settings {
@@ -174,7 +183,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// instead of silent. Debug builds only via EOS_DEBUG; stream with:
     ///   log stream --predicate 'subsystem == "co.wonders.filmtether"' --info
     func applicationDidFinishLaunching(_ notification: Notification) {
+        MenuBarTidy.install()
+
         guard ProcessInfo.processInfo.environment["EOS_DEBUG"] == "1" else { return }
+
+        // Re-dump on every menu-bar click. The launch dump below misses anything
+        // AppKit only inserts while a menu is tracking, so opening a menu once
+        // is what produces the trustworthy report.
+        MenuBarTidy.onTidied = { Self.dumpMenus(reason: "menu opened") }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             var report = ""
             for w in NSApp.windows where w.isVisible {
@@ -193,7 +209,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // logging isn't always readable from a sandboxed shell.
             let path = NSTemporaryDirectory() + "filmtether-layout.txt"
             try? report.write(toFile: path, atomically: true, encoding: .utf8)
+
+            Self.dumpMenus(reason: "launch")
         }
+    }
+
+    /// Dump the finished menu bar.
+    ///
+    /// SwiftUI's `commands` builder describes what to *add*; what AppKit ends up
+    /// with is the merge of that with the standard menus, and the two are not
+    /// easy to predict — an empty menu or a trailing separator is invisible in
+    /// the source and obvious here. Marks the problems rather than making you
+    /// spot them: a menu with no enabled items opens and instantly closes, and a
+    /// separator at the top or bottom draws as blank space.
+    static func dumpMenus(reason: String) {
+        let menus = "MENU BAR (\(reason))\n" + describeMenus()
+        layoutLog.info("\(menus, privacy: .public)")
+        try? menus.write(toFile: NSTemporaryDirectory() + "filmtether-menus.txt",
+                         atomically: true, encoding: .utf8)
+    }
+
+    static func describeMenus() -> String {
+        var out = ""
+        for item in NSApp.mainMenu?.items ?? [] {
+            guard let menu = item.submenu else { continue }
+            let real = menu.items.filter { !$0.isSeparatorItem }
+            var notes: [String] = []
+            if real.isEmpty { notes.append("EMPTY — opens then closes") }
+            if menu.items.first?.isSeparatorItem == true { notes.append("leading separator") }
+            if menu.items.last?.isSeparatorItem == true { notes.append("TRAILING separator — blank space at the bottom") }
+            out += "\n\(item.title)  [\(real.count) items]"
+            out += notes.isEmpty ? "\n" : "  ⚠️ \(notes.joined(separator: "; "))\n"
+            for (i, sub) in menu.items.enumerated() {
+                if sub.isSeparatorItem {
+                    let doubled = i > 0 && menu.items[i - 1].isSeparatorItem
+                    out += "    ---------\(doubled ? "  ⚠️ doubled" : "")\n"
+                } else {
+                    out += "    \(sub.title)\(sub.submenu != nil ? " ▸" : "")\n"
+                }
+            }
+        }
+        return out
     }
 
     /// Async-clean shutdown. We CANNOT use applicationWillTerminate +
