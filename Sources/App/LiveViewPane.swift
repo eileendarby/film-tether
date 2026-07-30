@@ -18,12 +18,25 @@ struct LiveViewPane: View {
 
     var body: some View {
         ZStack {
-            // Aspect-ratio constraint so the pane letterboxes inside the
-            // available space instead of cropping. 3:2 normally, 2:3 when the
-            // preview is rotated a quarter turn.
-            ImagePaneRepresentable()
-                .aspectRatio(model.previewAspectRatio, contentMode: .fit)
-                .background(paneSizeReporter())
+            // At 100% the pane fills the space and AppModel crops the frame to
+            // match: you're looking at a window onto part of the negative, so
+            // preserving the frame's shape would only waste screen. The
+            // navigator below is what then tells you which part you're on.
+            //
+            // Fit and 500% both letterbox to the frame's aspect ratio (3:2, or
+            // 2:3 rotated). At 500% that's because the body already sends just
+            // the magnified region, in its own 3:2 shape — filling the pane
+            // would mean cropping away pixels it went to the trouble of
+            // magnifying.
+            Group {
+                if model.previewZoom == .actual {
+                    ImagePaneRepresentable()
+                } else {
+                    ImagePaneRepresentable()
+                        .aspectRatio(model.previewAspectRatio, contentMode: .fit)
+                }
+            }
+            .background(paneSizeReporter())
             // Eyedropper takes over the whole pane while armed, so a click
             // samples white balance instead of moving the metering box. It
             // outranks the metering layer deliberately: the two would otherwise
@@ -41,7 +54,13 @@ struct LiveViewPane: View {
             // box is composited into the frame (AppModel.drawZoomBox), always
             // shown while the overlay toggle is on (no fade). Click OR drag
             // anywhere to zip the box (zoom target), centered, to that point.
-            else if model.showMeteringOverlay && model.isLiveViewOn && model.zoomMode == .fit {
+            // Not at 100%: there the pane is a *window* onto the frame, so a
+            // click's position over the pane is not its position in the frame
+            // and this layer would move the box somewhere the operator didn't
+            // point. Keeping it off also leaves the pane free to take scroll
+            // events, which is how panning works at that zoom.
+            else if model.showMeteringOverlay && model.isLiveViewOn
+                        && model.zoomMode == .fit && model.previewZoom != .actual {
                 GeometryReader { geo in
                     Color.clear
                         .contentShape(Rectangle())
@@ -68,6 +87,15 @@ struct LiveViewPane: View {
                 }
                 .aspectRatio(model.previewAspectRatio, contentMode: .fit)
             }
+            // Overview of the whole frame with the visible region marked, sat in
+            // the bottom-right corner. Only while zoomed, and only when there's
+            // somewhere to pan to.
+            if model.isPreviewPannable, let thumb = model.navigatorThumbnail {
+                NavigatorOverlay(thumbnail: thumb,
+                                 region: model.previewVisibleRegion) { center in
+                    Task { await model.setPreviewPanCenter(center) }
+                }
+            }
         }
     }
 
@@ -82,6 +110,71 @@ struct LiveViewPane: View {
                     model.previewPaneSize = newValue
                 }
         }
+    }
+}
+
+/// Overview of the whole frame with the on-screen region marked, for navigating
+/// while zoomed in.
+///
+/// It sits in the bottom-right corner of the pane, small enough not to hide the
+/// negative. Dragging (or clicking) inside it moves the region to the pointer —
+/// the same jump-to-here behaviour the metering box already has, rather than
+/// tracking a grab offset.
+private struct NavigatorOverlay: View {
+    /// Whole frame, already rotated for display.
+    let thumbnail: NSImage
+    /// Region currently on screen, normalized in the thumbnail's own space.
+    let region: CGRect
+    let onPan: (CGPoint) -> Void
+
+    /// Budget for the thumbnail's longest side. Big enough to make out where
+    /// you are in a strip of negatives, small enough to sit on top of one.
+    private static let maxSize = CGSize(width: 180, height: 180)
+    private static let inset: CGFloat = 12
+
+    private var size: CGSize {
+        let s = thumbnail.size
+        guard s.width > 0, s.height > 0 else { return .zero }
+        return PreviewViewport.thumbnailSize(
+            frameAspect: s.width / s.height, maxSize: Self.maxSize)
+    }
+
+    var body: some View {
+        let size = self.size
+        if size.width > 0, size.height > 0 {
+            Image(nsImage: thumbnail)
+                .resizable()
+                .frame(width: size.width, height: size.height)
+                .overlay(indicator(in: size))
+                .overlay(Rectangle().stroke(Color.white.opacity(0.5), lineWidth: 1))
+                .shadow(radius: 4)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)   // 0 → a plain click pans too
+                        .onChanged { value in
+                            onPan(PreviewViewport.panCenter(
+                                forNavigatorPoint: value.location,
+                                thumbnailSize: size,
+                                visibleSize: CGSize(width: region.width,
+                                                    height: region.height)
+                            ))
+                        }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity,
+                       alignment: .bottomTrailing)
+                .padding(Self.inset)
+        }
+    }
+
+    /// White box over the part of the frame that's on screen. Drawn in the
+    /// thumbnail's coordinates, so it needs no knowledge of the pane.
+    private func indicator(in size: CGSize) -> some View {
+        Rectangle()
+            .stroke(Color.white, lineWidth: 2)
+            .frame(width: max(region.width * size.width, 4),
+                   height: max(region.height * size.height, 4))
+            .position(x: region.midX * size.width,
+                      y: region.midY * size.height)
     }
 }
 
@@ -150,10 +243,98 @@ private struct ImagePaneRepresentable: NSViewRepresentable {
         nsView.imageScaling = model.previewZoom == .actual
             ? .scaleNone
             : .scaleProportionallyUpOrDown
+        // Scrolling and middle-drag both pan the zoomed preview. Handled down
+        // here in AppKit rather than as SwiftUI gestures: SwiftUI has no scroll
+        // gesture outside a ScrollView (and wrapping the pane in one would hand
+        // it a scrolling content size we don't want), and it can't see the
+        // middle mouse button at all.
+        nsView.onPanBy = { [model] delta in model.scrollPreview(by: delta) }
+        nsView.canPan = model.isPreviewPannable
     }
 
     final class ImagePane: NSImageView {
         override var acceptsFirstResponder: Bool { true }
+
+        /// Pan the preview by a distance in points, y-down.
+        var onPanBy: ((CGSize) -> Void)?
+        /// False at Fit, where there's nowhere to pan — events then go to the
+        /// responder chain instead of being quietly eaten.
+        var canPan = false
+
+        /// Points to travel per unit of a notched wheel's delta.
+        ///
+        /// Trackpads and Magic Mice report precise deltas already in points, so
+        /// they're used as-is. An old-fashioned wheel reports lines — about 1.0
+        /// per notch — which would otherwise move the image by a single pixel.
+        private static let pointsPerLine: CGFloat = 40
+
+        override func scrollWheel(with event: NSEvent) {
+            guard canPan, let onPanBy else {
+                super.scrollWheel(with: event)
+                return
+            }
+            let scale = event.hasPreciseScrollingDeltas ? 1 : Self.pointsPerLine
+            onPanBy(CGSize(width: event.scrollingDeltaX * scale,
+                           height: event.scrollingDeltaY * scale))
+        }
+
+        // MARK: - Middle-button drag
+
+        /// Where the pointer was at the last drag event, in window coordinates.
+        /// Deltas are taken from this rather than from `NSEvent.deltaY`, whose
+        /// sign convention for mouse movement is the opposite of the scroll
+        /// events above — computing both the same way keeps one pan direction.
+        private var dragAnchor: NSPoint?
+        /// Guards the cursor push/pop. `NSCursor.push()` is a stack, so an
+        /// unbalanced pop leaks the cursor to the whole app.
+        private var grabCursorPushed = false
+
+        override func otherMouseDown(with event: NSEvent) {
+            guard canPan, event.buttonNumber == 2 else {
+                super.otherMouseDown(with: event)
+                return
+            }
+            dragAnchor = event.locationInWindow
+            if !grabCursorPushed {
+                NSCursor.closedHand.push()
+                grabCursorPushed = true
+            }
+        }
+
+        override func otherMouseDragged(with event: NSEvent) {
+            guard let anchor = dragAnchor, let onPanBy else {
+                super.otherMouseDragged(with: event)
+                return
+            }
+            let now = event.locationInWindow
+            dragAnchor = now
+            // Window coordinates are y-up; the pan maths is y-down. Dragging
+            // then moves the picture with the pointer, which is what a grab is.
+            onPanBy(CGSize(width: now.x - anchor.x, height: anchor.y - now.y))
+        }
+
+        override func otherMouseUp(with event: NSEvent) {
+            guard dragAnchor != nil else {
+                super.otherMouseUp(with: event)
+                return
+            }
+            endGrab()
+        }
+
+        /// Zooming back to Fit mid-drag, or the view going away entirely, would
+        /// otherwise strand the closed-hand cursor.
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window == nil { endGrab() }
+        }
+
+        private func endGrab() {
+            dragAnchor = nil
+            if grabCursorPushed {
+                NSCursor.pop()
+                grabCursorPushed = false
+            }
+        }
 
         /// NSImageView reports the image's pixel size as its intrinsic size,
         /// which SwiftUI honours — so a rotated (tall) frame or a frame larger

@@ -167,6 +167,155 @@ final class AppModel: ObservableObject {
     /// this, releasing Shift always dropped to Fit even if you were at 100%.
     private var zoomBeforeHold: PreviewZoom = .fit
 
+    /// Centre of the on-screen window over the frame while zoomed, normalized
+    /// in **displayed** (rotated) space — the same space the navigator is drawn
+    /// in, so dragging there needs no conversion.
+    @Published private(set) var previewPanCenter = CGPoint(x: 0.5, y: 0.5)
+
+    /// Whole-frame overview for the navigator. Held from the most recent
+    /// full-frame arrival, because at 500% the camera streams only the magnified
+    /// region and there is no live full frame to draw an overview from.
+    @Published private(set) var navigatorThumbnail: NSImage?
+
+    /// Backing for `scheduleCameraPan`: the in-flight move, and whether the
+    /// target has changed since it started.
+    private var cameraPanTask: Task<Void, Never>?
+    private var cameraPanDirty = false
+
+    /// Size of the displayed frame in pixels, after rotation.
+    private var displayedFrameSize: CGSize {
+        navigatorThumbnail?.size ?? latestFrame?.size ?? .zero
+    }
+
+    /// Fraction of the frame on screen, and so whether panning is possible.
+    var previewVisibleSize: CGSize {
+        let r = previewVisibleRegion
+        return CGSize(width: r.width, height: r.height)
+    }
+
+    /// True when the preview is showing less than the whole frame, i.e. the
+    /// navigator is worth drawing.
+    var isPreviewPannable: Bool {
+        previewZoom != .fit && PreviewViewport.isPannable(visibleSize: previewVisibleSize)
+    }
+
+    /// Region of the whole frame currently on screen, normalized in displayed
+    /// space. This is what the navigator's indicator draws.
+    ///
+    /// The two zoomed modes mean different things and are computed differently.
+    /// At 100% the camera streams the whole frame and we show a window onto it,
+    /// so the region is host-side geometry. At 500% the camera streams *only*
+    /// the magnified region, so the region on screen is wherever the body's
+    /// punch-in is pointed — which is `meteringCenter`, in sensor space, mapped
+    /// through the rotation to match the navigator.
+    var previewVisibleRegion: CGRect {
+        switch previewZoom {
+        case .fit:
+            return CGRect(x: 0, y: 0, width: 1, height: 1)
+        case .actual:
+            return PreviewViewport.visibleRect(
+                frame: displayedFrameSize, pane: previewPaneSize,
+                scale: 1, center: previewPanCenter
+            )
+        case .fiveX:
+            let f = AppModel.zoomBoxFraction
+            let c = previewRotation.displayPoint(fromSensor: meteringCenter)
+            return CGRect(x: c.x - f / 2, y: c.y - f / 2, width: f, height: f)
+        }
+    }
+
+    /// Move the on-screen window, from a normalized centre in displayed space.
+    ///
+    /// At 100% this is a host-side scroll. At 500% it has to move the camera's
+    /// punch-in instead, since that's what determines which pixels arrive at
+    /// all — so it routes through the existing `eoszoomposition` path rather
+    /// than duplicating it.
+    func setPreviewPanCenter(_ center: CGPoint) async {
+        switch previewZoom {
+        case .fit:
+            return
+        case .actual:
+            previewPanCenter = PreviewViewport.clampCenter(
+                center, visibleSize: previewVisibleSize
+            )
+        case .fiveX:
+            let f = AppModel.zoomBoxFraction
+            let lo = f / 2, hi = 1 - f / 2
+            let sensor = previewRotation.sensorPoint(fromDisplay: center)
+            meteringCenter = CGPoint(
+                x: min(max(sensor.x, lo), hi),
+                y: min(max(sensor.y, lo), hi)
+            )
+            await moveCameraZoomToMeteringCenter()
+        }
+    }
+
+    /// Pan by a scroll over the preview, so reaching another part of the
+    /// negative doesn't mean travelling to the navigator every time.
+    ///
+    /// `delta` is in points, in AppKit's scroll convention. Horizontal comes
+    /// along for free and is worth having: at 100% a rotated frame is usually
+    /// off-screen sideways too.
+    func scrollPreview(by delta: CGSize) {
+        guard isPreviewPannable else { return }
+        let visible = previewVisibleSize
+        let region = previewVisibleRegion
+        let next = PreviewViewport.pannedCenter(
+            CGPoint(x: region.midX, y: region.midY),
+            byScroll: delta, visibleSize: visible, pane: previewPaneSize
+        )
+        switch previewZoom {
+        case .fit:
+            return
+        case .actual:
+            // Pure host-side crop offset: free, so every event can be honoured.
+            previewPanCenter = next
+        case .fiveX:
+            // Moving the body's punch-in is a USB write costing tens of
+            // milliseconds, and scroll events arrive far faster than that.
+            // Update the centre now so the navigator tracks the gesture, and
+            // let the camera catch up on its own schedule.
+            let f = AppModel.zoomBoxFraction
+            let lo = f / 2, hi = 1 - f / 2
+            let sensor = previewRotation.sensorPoint(fromDisplay: next)
+            meteringCenter = CGPoint(
+                x: min(max(sensor.x, lo), hi),
+                y: min(max(sensor.y, lo), hi)
+            )
+            scheduleCameraPan()
+        }
+    }
+
+    /// Coalesce a burst of scroll events into as few camera moves as possible.
+    ///
+    /// One move is in flight at a time; anything that arrives meanwhile just
+    /// marks the target dirty, and the loop picks up whatever `meteringCenter`
+    /// has become. The dirty flag is what keeps the *last* event from being
+    /// dropped — without it, an event landing during a move would be swallowed
+    /// and the body would settle somewhere the operator didn't ask for.
+    private func scheduleCameraPan() {
+        cameraPanDirty = true
+        guard cameraPanTask == nil else { return }
+        cameraPanTask = Task { [weak self] in
+            defer { self?.cameraPanTask = nil }
+            while self?.cameraPanDirty == true {
+                self?.cameraPanDirty = false
+                // Let the burst finish before spending a write on it.
+                try? await Task.sleep(nanoseconds: 120_000_000)
+                await self?.moveCameraZoomToMeteringCenter()
+            }
+        }
+    }
+
+    /// Point the body's punch-in at the current metering centre. Extracted so
+    /// the arrow-key nudge and the navigator drag drive the same code.
+    private func moveCameraZoomToMeteringCenter() async {
+        guard zoomMode != .fit, !zoomFallbackActive, let lz = liveZoom else { return }
+        let (x, y) = bodyZoomTopLeft()
+        self.zoomBodyCenter = (x, y)
+        await withLVPriority { try? await lz.setZoomPosition(x: x, y: y) }
+    }
+
     // MARK: - Preview adjustments (monochrome + click white balance)
 
     /// Host-side preview corrections, proxied to AppSettings so they persist.
@@ -228,8 +377,12 @@ final class AppModel: ObservableObject {
     /// operator is being asked to click the opposite of what they've learned to
     /// look for. Blocking it is a deliberate guard against picking the wrong
     /// spot, not a technical limitation.
+    /// Also blocked at 100%, where the pane shows a window onto the frame rather
+    /// than the whole of it: the click's position over the pane isn't its
+    /// position in the frame, so the eyedropper would sample the wrong pixel.
+    /// Fit and 5× both show a whole frame, so both are honest.
     var canPickWhiteBalance: Bool {
-        isLiveViewOn && !previewAdjustments.invert
+        isLiveViewOn && !previewAdjustments.invert && previewZoom != .actual
     }
 
     /// Arm or disarm the white-balance eyedropper.
@@ -348,7 +501,16 @@ final class AppModel: ObservableObject {
     func setPreviewZoom(_ z: PreviewZoom) async {
         let wasPunchedIn = previewZoom.engagesCameraPunchIn
         self.previewZoom = z
+        // Entering a zoom starts centred; leaving it makes the pan meaningless.
+        self.previewPanCenter = CGPoint(x: 0.5, y: 0.5)
         appLog.info("preview zoom → \(z.rawValue, privacy: .public)")
+        // Sampling is blocked at 100% (see `canPickWhiteBalance`). Disarm on the
+        // way in, or the button greys out while the pane still samples on the
+        // next click — the same trap as inverting with the picker armed.
+        if !canPickWhiteBalance, isPickingWhiteBalance {
+            isPickingWhiteBalance = false
+            showNotice("White balance picking cancelled — sample at Fit or 500%")
+        }
         guard z.engagesCameraPunchIn != wasPunchedIn else { return }
         await applyZoom(z.engagesCameraPunchIn ? .fivex : .fit)
     }
@@ -686,6 +848,8 @@ final class AppModel: ObservableObject {
         zoomMode = .fit
         previewZoom = .fit
         zoomBeforeHold = .fit
+        previewPanCenter = CGPoint(x: 0.5, y: 0.5)
+        navigatorThumbnail = nil
         zoomBodyCenter = (2592, 1728)  // Evf-space center; recomputed on next zoom anyway
     }
 
@@ -753,10 +917,54 @@ final class AppModel: ObservableObject {
             composed = Self.drawZoomBox(on: base, center: meteringCenter,
                                         fraction: AppModel.zoomBoxFraction)
         }
-        // Rotation is deliberately the LAST step: every overlay above was
-        // positioned in sensor space, so turning the finished frame keeps the
-        // box glued to the image content instead of sliding off it.
-        self.latestFrame = composed.map { previewRotation.rotate($0) }
+        // Rotation is deliberately the LAST step of composition: every overlay
+        // above was positioned in sensor space, so turning the finished frame
+        // keeps the box glued to the image content instead of sliding off it.
+        let rotated = composed.map { previewRotation.rotate($0) }
+
+        // Keep the newest *whole* frame for the navigator overview. Only frames
+        // arriving while the body is at fit are whole — once punched in, the
+        // camera sends just the magnified region, so there'd be nothing to draw
+        // an overview from.
+        if zoomMode == .fit, let rotated {
+            self.navigatorThumbnail = rotated
+        }
+
+        // At 100% the pane fills the window rather than letterboxing, so the
+        // frame is cropped to a window with the pane's shape. Cropping here (and
+        // then scaling proportionally to fill) is what gives exact control over
+        // which part is on screen — NSImageView's own scaling modes can only
+        // centre or stretch, neither of which can pan.
+        //
+        // 500% is deliberately NOT cropped: the magnification has already
+        // happened, either on the body or in the JPEG fallback above, and the
+        // arriving frame *is* the visible region. Cropping it again to the same
+        // region would magnify twice.
+        if let rotated, previewZoom == .actual,
+           let cropped = Self.crop(rotated, toNormalized: previewVisibleRegion) {
+            self.latestFrame = cropped
+        } else {
+            self.latestFrame = rotated
+        }
+    }
+
+    /// Crop an image to a normalized, y-down rect. Returns nil if the rect is
+    /// degenerate or the image can't be decoded, so the caller falls back to
+    /// showing the whole frame rather than nothing.
+    private static func crop(_ image: NSImage, toNormalized rect: CGRect) -> NSImage? {
+        guard rect.width > 0, rect.height > 0,
+              rect.width < 0.999 || rect.height < 0.999,
+              let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        else { return nil }
+        let w = CGFloat(cg.width), h = CGFloat(cg.height)
+        // CGImage.cropping takes a top-left origin, matching our y-down rect.
+        let px = CGRect(
+            x: (rect.minX * w).rounded(), y: (rect.minY * h).rounded(),
+            width: max(1, (rect.width * w).rounded()),
+            height: max(1, (rect.height * h).rounded())
+        ).intersection(CGRect(x: 0, y: 0, width: w, height: h))
+        guard px.width >= 1, px.height >= 1, let out = cg.cropping(to: px) else { return nil }
+        return NSImage(cgImage: out, size: NSSize(width: out.width, height: out.height))
     }
 
     /// Composite the zoom-target rectangle onto a copy of the frame in image
@@ -1477,11 +1685,7 @@ final class AppModel: ObservableObject {
         meteringCenter = c
         // If the real sensor zoom is engaged, move the punch-in to the new
         // spot too (arrows nudge the live magnified region, like EOS Utility).
-        if zoomMode != .fit, !zoomFallbackActive, let lz = liveZoom {
-            let (x, y) = bodyZoomTopLeft()
-            self.zoomBodyCenter = (x, y)
-            await withLVPriority { try? await lz.setZoomPosition(x: x, y: y) }
-        }
+        await moveCameraZoomToMeteringCenter()
     }
 
     private func applyZoom(_ mode: LiveZoom.Mode) async {

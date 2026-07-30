@@ -18,6 +18,7 @@ The handful of things that actually matter for the way I use it.
 - **Positive preview.** Cmd-I inverts the live view so a negative shows as the positive image it will become, instead of making you judge framing and focus on an inverted picture. The captured RAW is still the negative.
 - **Black-and-white preview.** Cmd-B shows the preview in mono. Raw pixels off a B&W negative carry no useful colour, so it's easier to judge exposure and focus without it.
 - **Click-to-set white balance.** Arm the eyedropper, click the unexposed film base, and its colour cast is neutralised. The blue/amber half is sent to the camera as a colour temperature, so it lands in the captured RAW; the green/magenta half, which a Kelvin control can't express, is corrected on the preview. Click again to refine.
+- **Zoom and pan.** Fit, 100%, or 500%. At 100% the preview fills the window instead of letterboxing. Zoomed in either way, scroll or middle-drag to pan, and a thumbnail of the whole negative appears in the corner with a box marking what you're looking at — click or drag in it to jump somewhere else.
 - **Focus check.** Hold Shift to punch in using the camera's sensor and confirm your focus is sharp.
 - **Focus control.** Keyboard shortcuts for stepping focus, when the conditions are right (lens set to AF, live view on).
 - **Focus peaking.** An adjustable overlay that attempts to highlight what's in focus (far from perfect).

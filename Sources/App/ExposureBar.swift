@@ -140,6 +140,8 @@ struct ExposureBar: View {
         }
         .help(model.previewAdjustments.invert
               ? "Unavailable while the preview is inverted: with a positive on screen the film base is the darkest part of the picture, not the brightest, which invites clicking the wrong spot. Switch to Negative to sample."
+              : model.previewZoom == .actual
+              ? "Unavailable at 100%, where the pane shows a window onto the frame rather than the whole of it, so a click doesn't identify the pixel underneath it. Sample at Fit or 500%."
               : "Click here, then click the unexposed film base in the preview to neutralise its colour cast. The blue/amber half is sent to the camera as a colour temperature, so it reaches the captured RAW; the green/magenta half, which a Kelvin control can't express, is corrected on the preview. Click again to refine — each sample corrects what's left. Clear the preview part from the Preview menu.")
         .disabled(!model.canPickWhiteBalance)
     }

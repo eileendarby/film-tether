@@ -2,6 +2,57 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-07-30 — Scroll and middle-drag to pan the zoomed preview
+
+Reaching another part of the negative meant travelling to the navigator box
+every time. The scroll wheel now pans the preview directly at 100% and 500%, and
+a middle-button drag grabs the picture and moves it with the pointer, with a
+closed-hand cursor for the duration. Horizontal scrolling came along for free and
+is worth keeping: at 100% a rotated frame is usually off-screen sideways too.
+
+Both routes share one direction convention and one pan function. The drag takes
+its delta from the pointer's window position rather than from `NSEvent.deltaY`,
+whose sign for mouse movement is the opposite of the scroll events' — deriving
+both the same way is what keeps them from disagreeing.
+
+The image travels the distance scrolled, so the gesture feels the same at either
+zoom even though it covers very different amounts of the negative.
+
+At **500%** panning means moving the body's punch-in, which is a USB write
+costing tens of milliseconds — and scroll events arrive far faster than that. So
+the centre updates immediately (the navigator tracks the gesture) while the
+camera moves are coalesced: one in flight at a time, with a dirty flag so the
+*last* event of a burst is never the one that gets dropped.
+
+**Two coordinate bugs found while doing this.** At 100% the pane shows a *window*
+onto the frame, not the whole of it — so a click's position over the pane is not
+its position in the frame. Two things were quietly relying on the wrong
+assumption:
+
+- The metering-box click layer would move the box somewhere the operator hadn't
+  pointed. It's now off at 100%, which also leaves the pane free to receive the
+  scroll events.
+- The eyedropper would sample the wrong pixel. Picking is now unavailable at
+  100%, with the button's help text saying why; Fit and 500% both show a whole
+  frame and remain honest. Switching to 100% with the picker armed disarms it,
+  the same guard inverting already had.
+
+**Changed:**
+
+- `Sources/Scan/PreviewViewport.swift` — `pannedCenter(_:byScroll:…)`, plus 5
+  tests covering direction, that the image keeps up with the gesture, that a
+  deeper zoom covers less ground, and edge clamping.
+- `Sources/App/AppModel.swift` — `scrollPreview(by:)` and `scheduleCameraPan`.
+- `Sources/App/LiveViewPane.swift` — `ImagePane.scrollWheel` and the
+  `otherMouse*` handlers. Handled in AppKit because a scroll wheel isn't a
+  SwiftUI gesture (and wrapping the pane in a `ScrollView` would hand it a
+  content size we don't want), and because SwiftUI can't see the middle mouse
+  button at all. Notched wheels report lines rather than points, so those are
+  scaled up; trackpads report precise deltas already in points and are used
+  as-is. The closed-hand cursor is push/pop-balanced with a flag and released if
+  the view goes away mid-drag — `NSCursor.push()` is a stack, and an unbalanced
+  pop leaks the cursor to the whole app.
+
 ## 2026-07-30 — The eyedropper now sets the camera's white balance, not just the preview's
 
 Clicking the film base neutralised the *preview* and nothing else. The body kept
@@ -59,6 +110,54 @@ repeated clicks.
   camera setting and rewinding it silently would be a surprise.
 - `Sources/App/ExposureBar.swift`, `Sources/App/FilmTetherApp.swift` — help text
   and the menu item renamed to say what each half actually does.
+
+## 2026-07-30 — Zoomed preview fills the window, with a navigator to pan it
+
+Zoomed in, the preview pane was still letterboxed to the frame's 3:2 shape, so
+100% and 500% wasted the same space Fit does — and there was no way to reach any
+part of the negative other than the middle.
+
+Now at **100%** the pane fills the window and the frame is cropped to a window
+with the *pane's* shape. **Fit** and **500%** still letterbox to the frame's
+aspect ratio — at 500% because the body already sends just the magnified region
+in its own 3:2 shape, so filling the pane could only mean throwing away pixels it
+went to the trouble of magnifying. Whenever less than the whole negative is on
+screen, a thumbnail of it appears in the bottom-right corner with a white box
+marking the visible region; click or drag inside it to go somewhere else.
+
+The two zoomed modes pan by different means, deliberately:
+
+- **100%** is host-side. The camera streams the whole frame and the app crops a
+  window out of it, so panning is a crop offset and costs nothing.
+- **500%** moves the *body's* punch-in, because at 5× the camera streams only the
+  magnified region — there are no other pixels to show. It routes through the
+  existing `eoszoomposition` path that the arrow-key nudge already used, so
+  there's one implementation of "point the body here".
+
+That's also why the navigator holds the last frame that arrived while the body
+was at fit rather than the current one: punched in, there is no whole frame to
+draw an overview from.
+
+**New:**
+
+- `Sources/Scan/PreviewViewport.swift` — the viewport geometry, free of SwiftUI
+  and libgphoto2 so it can be tested: `visibleRect`, `clampCenter` (an axis with
+  nothing to pan along pins to the middle), `isPannable`, `thumbnailSize`, and
+  `panCenter(forNavigatorPoint:)`.
+- `Tests/ScanTests/PreviewViewportTests.swift` — 12 tests, including a round trip
+  asserting the centre the navigator reports is the centre the visible window
+  ends up at, so the indicator can't lie about what's shown.
+
+**Changed:**
+
+- `Sources/App/AppModel.swift` — `previewPanCenter`, `navigatorThumbnail`,
+  `previewVisibleRegion`, `isPreviewPannable`, `setPreviewPanCenter`, and a
+  normalized-rect image crop. `handleFrame` caches the whole-frame thumbnail and
+  crops the displayed frame; the pan resets on zoom change and on stopping live
+  view. `nudgeMeteringCenter` was refactored onto the shared
+  `moveCameraZoomToMeteringCenter`.
+- `Sources/App/LiveViewPane.swift` — the aspect-ratio letterbox now applies only
+  at Fit, plus the new `NavigatorOverlay` view.
 
 ## 2026-07-29 — Fix Film Tether putting the camera into an uncorrectable blue cast
 
