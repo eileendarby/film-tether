@@ -72,7 +72,43 @@ struct DebugCLI {
         case "set-kelvin":
             guard let k = rest.first.flatMap(Int.init) else { fail("set-kelvin needs KELVIN") }
             try await runSetKelvin(k)
+        case "detect-crop":   try await runDetectCrop(path: rest.first)
         case "wb-probe":      try await runWhiteBalanceProbe()
+        case "crop-profile":  try await runCropProfile(path: rest.first)
+        case "edge-votes":
+            guard let path = rest.first else { fail("edge-votes needs PATH [WIDTH]") }
+            var win: EdgeVoting.DensityWindow?
+            if rest.count > 2, case let parts = rest[2].split(separator: ","), parts.count == 2,
+               let lo = Double(parts[0]), let hi = Double(parts[1]) {
+                win = EdgeVoting.DensityWindow(low: lo, high: hi)
+            }
+            try runEdgeVotes(path: path, width: rest.count > 1 ? Int(rest[1]) ?? 1024 : 1024,
+                             window: win)
+        case "crop-region":
+            guard let path = rest.first else { fail("crop-region needs PATH [LOW,HIGH]") }
+            var band: FrameRegion.Band?
+            if rest.count > 1, case let p = rest[1].split(separator: ","), p.count == 2,
+               let lo = Double(p[0]), let hi = Double(p[1]) {
+                band = FrameRegion.Band(low: lo, high: hi)
+            }
+            try runCropRegion(path: path, band: band)
+        case "crop-sweep":
+            guard let path = rest.first else { fail("crop-sweep needs PATH") }
+            try runCropSweep(path: path)
+        case "crop-plan":
+            guard let path = rest.first else { fail("crop-plan needs PATH [SIZE-ID]") }
+            let sizeID = rest.count > 1 ? Int(rest[1]) : nil
+            try runCropPlan(path: path, sizeID: sizeID,
+                            out: rest.count > 2 ? rest[2] : nil)
+        case "crop-preview":
+            guard let path = rest.first else { fail("crop-preview needs PATH [OUT] [LOW,HIGH]") }
+            var previewBand: FrameRegion.Band?
+            if rest.count > 2, case let p = rest[2].split(separator: ","), p.count == 2,
+               let lo = Double(p[0]), let hi = Double(p[1]) {
+                previewBand = FrameRegion.Band(low: lo, high: hi)
+            }
+            try runCropPreview(path: path, out: rest.count > 1 ? rest[1] : nil,
+                               band: previewBand)
         case "clock":         try await runClock()
         case "clock-under-lv": try await runClockUnderLiveView()
         case "clock-watch":
@@ -399,6 +435,575 @@ struct DebugCLI {
         print(modeOK
               ? "OK mode is Color Temperature, so the value applies"
               : "FAIL mode is still \(afterMode) — the value will be ignored")
+    }
+
+    /// Run auto-crop detection against a JPEG on disk, or against a freshly
+    /// grabbed live-view frame when no path is given.
+    ///
+    /// Synthetic tests can only prove the arithmetic; the thresholds have to be
+    /// judged against real negatives on the real light table, and this is how
+    /// that's done without going through the GUI.
+    @CameraActor
+    static func runDetectCrop(path: String?) async throws {
+        let data: Data
+        let source: String
+        if let path {
+            data = try Data(contentsOf: URL(fileURLWithPath: path))
+            source = path
+        } else {
+            let sess = try await openSession(); defer { sess.close() }
+            let props = CameraProperties(session: sess)
+            let lv = LiveView(session: sess, properties: props)
+            try await lv.start()
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            data = try await lv.fetchOnePreview()
+            try? await lv.stop()
+            source = "live view"
+        }
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+            print("could not decode \(source)")
+            return
+        }
+        print("source: \(source)  \(cg.width)x\(cg.height)")
+
+        // Centre-out finder: the one that matters. Starts under the lens and
+        // walks out to the first unexposed film in each direction.
+        if let f = FrameFinder.detect(in: cg) {
+            let r = f.rect
+            let px = CGSize(width: r.width * CGFloat(cg.width),
+                            height: r.height * CGFloat(cg.height))
+            print("CENTRE-OUT:")
+            print(String(format: "  rect: x=%.4f y=%.4f w=%.4f h=%.4f  (%.0f x %.0f px)",
+                         r.minX, r.minY, r.width, r.height, px.width, px.height))
+            print(String(format: "  aspect: %.3f   film base level: %@",
+                         Double(max(px.width, px.height) / max(min(px.width, px.height), 1)),
+                         f.filmBaseLevel.map { String(format: "%.3f", $0) } ?? "—"))
+            if f.unboundedEdges.isEmpty {
+                print("  bounded on all four sides")
+            } else {
+                let names = f.unboundedEdges.map(\.rawValue).sorted().joined(separator: ", ")
+                print("  UNBOUNDED on: \(names) — the negative runs past the picture there")
+            }
+            printCandidates(for: px)
+            print("")
+        } else {
+            print("CENTRE-OUT: no frame found\n")
+        }
+
+        // Coarse check: one box around all the film in view, which is a
+        // different question from which frame is under the lens.
+        guard let result = CropDetector.detect(in: cg, marginFraction: 0.02) else {
+            print("WHOLE: no crop detected — the frame looks uniform")
+            return
+        }
+        if !result.unboundedEdges.isEmpty {
+            let names = result.unboundedEdges.map(\.rawValue).sorted().joined(separator: ", ")
+            print("WHOLE: unbounded on \(names)")
+        }
+        let r = result.rect
+        let px = CGSize(width: r.width * CGFloat(cg.width),
+                        height: r.height * CGFloat(cg.height))
+        print(String(format: "rect: x=%.4f y=%.4f w=%.4f h=%.4f  (%.0f x %.0f px)",
+                     r.minX, r.minY, r.width, r.height, px.width, px.height))
+        print(String(format: "coverage: %.1f%%   aspect: %.3f",
+                     result.coverage * 100,
+                     Double(max(px.width, px.height) / max(min(px.width, px.height), 1))))
+        printCandidates(for: px)
+    }
+
+    nonisolated static func printCandidates(for px: CGSize) {
+        let candidates = FilmSizeMatcher.candidates(forCropSize: px, in: FilmSize.seedCatalog)
+        if candidates.isEmpty {
+            print("  film size: no catalogue match for that shape")
+        } else {
+            print("  film size candidates (no scale, so shape only):")
+            for c in candidates.prefix(4) {
+                print(String(format: "    %-28@ aspect off by %.1f%%",
+                             c.size.name as NSString, c.aspectError * 100))
+            }
+        }
+    }
+
+    /// Plan the crop the way the app will: region detection, checked against
+    /// the format the session expects, falling back to a built frame when it
+    /// disagrees. Draws the result over the picture.
+    nonisolated static func runCropPlan(path: String, sizeID: Int?, out: String?) throws {
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+            print("could not decode \(path)")
+            return
+        }
+        let expected = sizeID.flatMap { id in FilmSize.seedCatalog.first { $0.id == id } }
+        print("\((path as NSString).lastPathComponent)   expecting: \(expected?.name ?? "nothing")")
+
+        if let grid = ColorGrid.sample(cg, width: FrameRegion.analysisWidth),
+           let h = CropPlanner.crossBounds(in: grid, around: CGPoint(x: 0.5, y: 0.5)) {
+            let px = h.axis == .horizontal ? Double(cg.height) / Double(grid.height)
+                                           : Double(cg.width) / Double(grid.width)
+            print(String(format: "  cross: film runs %@, picture spans %.0f to %.0f px",
+                         h.axis.rawValue as NSString,
+                         Double(h.near) * px, Double(h.far) * px))
+        } else {
+            print("  cross bounds: not found")
+        }
+
+        guard let plan = CropPlanner.plan(in: cg, expecting: expected) else {
+            print("  no plan")
+            return
+        }
+        let w = plan.rect.width * Double(cg.width), hh = plan.rect.height * Double(cg.height)
+        print(String(format: "  %@  %.0f x %.0f px  aspect %.3f  angle %+.2f°%@%@",
+                     plan.route.rawValue as NSString, w, hh,
+                     max(w, hh) / max(min(w, hh), 1), plan.angle,
+                     plan.stableSteps > 0 ? "  stable \(plan.stableSteps)" : "",
+                     plan.anchoredEdge.map { "  anchored: \($0.rawValue)" } ?? ""))
+
+        guard let outPath = out else { return }
+        let ow = min(1600, cg.width)
+        let oh = max(1, Int((Double(cg.height) / Double(cg.width) * Double(ow)).rounded()))
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        guard let ctx = CGContext(data: nil, width: ow, height: oh, bitsPerComponent: 8,
+                                  bytesPerRow: 0, space: space,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: ow, height: oh))
+        ctx.setLineWidth(1)
+        // Green when the detector's own answer was believed, orange when the
+        // plan had to be built from what the session knows.
+        ctx.setStrokeColor(CGColor(colorSpace: space,
+                                   components: plan.route == .detected
+                                        ? [0.1, 0.9, 0.3, 1] : [1, 0.6, 0, 1])!)
+        let r = plan.rect
+        ctx.stroke(CGRect(x: r.minX * Double(ow), y: (1 - r.maxY) * Double(oh),
+                          width: r.width * Double(ow), height: r.height * Double(oh)))
+        guard let image = ctx.makeImage(),
+              let dest = CGImageDestinationCreateWithURL(
+                URL(fileURLWithPath: outPath) as CFURL, "public.jpeg" as CFString, 1, nil)
+        else { return }
+        CGImageDestinationAddImage(dest, image,
+            [kCGImageDestinationLossyCompressionQuality: 0.92] as CFDictionary)
+        _ = CGImageDestinationFinalize(dest)
+        print("  → \(outPath)")
+    }
+
+    /// Sweep one edge of the density band and print the region found at each
+    /// step, to see whether the answer is *stable* over a range of thresholds.
+    ///
+    /// This is the question behind the sweep-and-take-the-median approach: a
+    /// real frame should hold its shape while the threshold moves, because the
+    /// boundary it stops at is a genuine discontinuity. If no such plateau
+    /// exists there is nothing for a median to be robust about, and the whole
+    /// family of threshold methods is wrong for that picture.
+    ///
+    /// Both polarities are swept — unexposed film reads bright on a negative and
+    /// dark on a positive, and which one is in front of us isn't known.
+    nonisolated static func runCropSweep(path: String) throws {
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let cg = CGImageSourceCreateImageAtIndex(src, 0, nil),
+              let grid = ColorGrid.sample(cg, width: FrameRegion.analysisWidth) else {
+            print("could not decode \(path)")
+            return
+        }
+        print("source: \((path as NSString).lastPathComponent)  \(cg.width)x\(cg.height)")
+
+        var centre: [Double] = []
+        for y in (grid.height * 3 / 8)..<(grid.height * 5 / 8) {
+            for x in (grid.width * 3 / 8)..<(grid.width * 5 / 8) {
+                centre.append(grid[x, y].luminance)
+            }
+        }
+        centre.sort()
+        let picture = centre[centre.count / 2]
+        print(String(format: "  picture level %.3f", picture))
+
+        for rising in [true, false] {
+            // rising: the band's *upper* edge moves up, with the lower edge held
+            // below the picture — the arrangement for unexposed film that reads
+            // brighter than the picture. falling: the mirror image.
+            print(rising ? "\n  upper edge sweeping up (unexposed film brighter)"
+                         : "\n  lower edge sweeping down (unexposed film darker)")
+            print("   thresh  coverage   x      y      w      h     angle")
+            var t = rising ? picture + 0.02 : picture - 0.02
+            while rising ? t <= 0.99 : t >= 0.01 {
+                let band = rising
+                    ? FrameRegion.Band(low: 0.0, high: t)
+                    : FrameRegion.Band(low: t, high: 1.0)
+                if let r = FrameRegion.detect(in: grid, around: CGPoint(x: 0.5, y: 0.5), band: band) {
+                    print(String(format: "   %.3f   %5.1f%%   %.3f  %.3f  %.3f  %.3f  %+.2f",
+                                 t, r.coverage * 100,
+                                 r.center.x, r.center.y, r.size.width, r.size.height, r.angle))
+                } else {
+                    print(String(format: "   %.3f      —", t))
+                }
+                t += rising ? 0.02 : -0.02
+            }
+        }
+    }
+
+    /// Grow the frame as a connected region and report the oriented rectangle.
+    nonisolated static func runCropRegion(path: String, band: FrameRegion.Band?) throws {
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let cg = CGImageSourceCreateImageAtIndex(src, 0, nil),
+              let grid = ColorGrid.sample(cg, width: FrameRegion.analysisWidth) else {
+            print("could not decode \(path)")
+            return
+        }
+        print("source: \((path as NSString).lastPathComponent)  \(cg.width)x\(cg.height)")
+
+        func percentiles(_ v: [Double]) -> String {
+            let s = v.sorted()
+            func q(_ f: Double) -> Double { s[min(s.count - 1, Int(Double(s.count - 1) * f))] }
+            return String(format: "p05 %.3f  p50 %.3f  p95 %.3f", q(0.05), q(0.50), q(0.95))
+        }
+        var all: [Double] = [], centre: [Double] = []
+        for y in 0..<grid.height {
+            for x in 0..<grid.width {
+                let v = grid[x, y].luminance
+                all.append(v)
+                if y >= grid.height * 3 / 8, y < grid.height * 5 / 8,
+                   x >= grid.width * 3 / 8, x < grid.width * 5 / 8 { centre.append(v) }
+            }
+        }
+        print("  whole:  \(percentiles(all))")
+        print("  centre: \(percentiles(centre))   ← picture, by assumption")
+
+        let use = band ?? autoBand(all: all, centre: centre)
+        print(String(format: "  band %.3f–%.3f%@", use.low, use.high,
+                     band == nil ? " (derived)" : " (given)"))
+
+        guard let r = FrameRegion.detect(in: cg, band: use) else {
+            print("  no region found")
+            return
+        }
+        let px = CGSize(width: r.size.width * Double(cg.width),
+                        height: r.size.height * Double(cg.height))
+        print(String(format: "  centre (%.4f, %.4f)  size %.0f x %.0f px  angle %+.2f°",
+                     r.center.x, r.center.y, px.width, px.height, r.angle))
+        print(String(format: "  aspect %.3f   coverage %.1f%%   %@",
+                     max(px.width, px.height) / max(min(px.width, px.height), 1),
+                     r.coverage * 100,
+                     r.touchesBorder ? "touches the picture's border" : "wholly inside the picture"))
+        printCandidates(for: px)
+    }
+
+    /// Band of densities that exposed film occupies: above the holder, below the
+    /// unexposed base. Provisional — the reference implementation this follows
+    /// leaves both bounds as operator sliders rather than deriving them.
+    nonisolated static func autoBand(all: [Double], centre: [Double]) -> FrameRegion.Band {
+        let s = all.sorted(), c = centre.sorted()
+        func q(_ v: [Double], _ f: Double) -> Double {
+            v[min(v.count - 1, Int(Double(v.count - 1) * f))]
+        }
+        let pictureLow = q(c, 0.02), pictureHigh = q(c, 0.98)
+        let base = q(s, 0.97)
+        return FrameRegion.Band(
+            low: pictureLow / 2,
+            high: pictureHigh + (max(base, pictureHigh) - pictureHigh) / 2
+        )
+    }
+
+    /// Pick a density band to look across.
+    ///
+    /// It has to sit between the picture's own tones and the film base's, so
+    /// that the only transitions left are the ones crossing from picture to
+    /// base. The picture is sampled from the middle of the frame, which is under
+    /// the lens and so is picture by assumption; the base is taken as a high
+    /// percentile, being the brightest thing present in quantity on a negative.
+    ///
+    /// Provisional. Derived this way the band is wider than one chosen by hand
+    /// for a given negative, and lets more of the photograph's own edges back
+    /// into the vote.
+    nonisolated static func autoWindow(for grid: ColorGrid) -> EdgeVoting.DensityWindow {
+        var all: [Double] = []
+        all.reserveCapacity(grid.width * grid.height)
+        for y in 0..<grid.height {
+            for x in 0..<grid.width { all.append(grid[x, y].luminance) }
+        }
+        all.sort()
+        var centre: [Double] = []
+        for y in (grid.height * 3 / 8)..<(grid.height * 5 / 8) {
+            for x in (grid.width * 3 / 8)..<(grid.width * 5 / 8) {
+                centre.append(grid[x, y].luminance)
+            }
+        }
+        centre.sort()
+        guard !all.isEmpty, !centre.isEmpty else {
+            return EdgeVoting.DensityWindow(low: 0, high: 1)
+        }
+        let picture = centre[centre.count / 2]
+        let base = all[Int(Double(all.count - 1) * 0.95)]
+        let gap = base - picture
+        return EdgeVoting.DensityWindow(low: picture + gap * 0.4, high: base + gap * 0.4)
+    }
+
+    /// Rank the candidate straight edges by how many lines vote for them.
+    ///
+    /// Prints positions in the *source* image's pixels as well as the working
+    /// grid's, so a candidate can be checked against a coordinate read off the
+    /// original in an editor.
+    nonisolated static func runEdgeVotes(path: String, width: Int,
+                                         window: EdgeVoting.DensityWindow? = nil) throws {
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let cg = CGImageSourceCreateImageAtIndex(src, 0, nil),
+              let grid = ColorGrid.sample(cg, width: width) else {
+            print("could not decode \(path)")
+            return
+        }
+        print("source: \((path as NSString).lastPathComponent)  \(cg.width)x\(cg.height)  →  grid \(grid.width)x\(grid.height)")
+        var all: [Double] = []
+        for y in 0..<grid.height { for x in 0..<grid.width { all.append(grid[x, y].luminance) } }
+        all.sort()
+        func q(_ f: Double) -> Double { all[min(all.count - 1, Int(Double(all.count - 1) * f))] }
+        print(String(format: "  luminance p01 %.3f  p10 %.3f  p50 %.3f  p75 %.3f  p90 %.3f  p95 %.3f  p99 %.3f  max %.3f",
+                     q(0.01), q(0.10), q(0.50), q(0.75), q(0.90), q(0.95), q(0.99), q(1.0)))
+        // Derive the band: it has to sit between the picture's own tones and the
+        // film base's. The picture is sampled from the middle of the frame,
+        // which is under the lens and so is picture by assumption; the base is
+        // taken as a high percentile, being the brightest thing present in
+        // quantity on a negative.
+        let auto = autoWindow(for: grid)
+        print(String(format: "  auto window %.3f–%.3f", auto.low, auto.high))
+        let useWindow = window ?? auto
+
+        for orientation in [EdgeVoting.Orientation.vertical, .horizontal] {
+            let axisLen = orientation == .vertical ? grid.width : grid.height
+            let scale = orientation == .vertical
+                ? Double(cg.width) / Double(grid.width)
+                : Double(cg.height) / Double(grid.height)
+            let raw = EdgeVoting.candidates(in: grid, orientation: orientation,
+                                            window: useWindow, minCoverage: 0.50)
+            let found = EdgeVoting.merged(raw, within: max(2, axisLen / 200),
+                                          nearest: axisLen / 2)
+            print("\n\(orientation.rawValue.uppercased()) edges — \(raw.count) raw → \(found.count) merged  (≥50% agreement)")
+            print("   grid   source px   agreement  strength")
+            for c in found.sorted(by: { $0.strength > $1.strength }).prefix(14) {
+                print(String(format: "  %5d   %8.0f   %8.1f%%   %.4f",
+                             c.index, Double(c.index) * scale, c.coverage * 100, c.strength))
+            }
+        }
+    }
+    /// Write a JPEG with every detector's crop drawn on it, one colour each.
+    ///
+    /// Numbers say a crop is 5248×5122; only a picture says whether those are
+    /// the *right* 5248×5122. Drawing all three together is also the only
+    /// straightforward way to see where they agree — agreement between methods
+    /// that fail differently is worth more than any one of them being confident.
+    ///
+    ///   red    FrameFinder   line profiles, walked out from the centre
+    ///   blue   EdgeVoting    aligned density shifts, bracketing the centre
+    ///   green  FrameRegion   connected region, oriented rectangle
+    nonisolated static func runCropPreview(path: String, out: String?,
+                                           band: FrameRegion.Band? = nil) throws {
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+            print("could not decode \(path)")
+            return
+        }
+        let name = (path as NSString).lastPathComponent
+        print(name)
+
+        let w = min(1600, cg.width)
+        let h = max(1, Int((Double(cg.height) / Double(cg.width) * Double(w)).rounded()))
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        guard let ctx = CGContext(
+            data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+            space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { print("  could not make a context"); return }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        ctx.setLineWidth(1)
+
+        func color(_ r: Double, _ g: Double, _ b: Double) -> CGColor {
+            CGColor(colorSpace: space, components: [r, g, b, 1])!
+        }
+        /// Normalized y-down rect to the context's y-up pixels.
+        func draw(_ r: CGRect, _ c: CGColor) {
+            ctx.setStrokeColor(c)
+            ctx.stroke(CGRect(x: r.minX * Double(w), y: (1 - r.maxY) * Double(h),
+                              width: r.width * Double(w), height: r.height * Double(h)))
+        }
+        func report(_ label: String, _ r: CGRect, _ extra: String = "") {
+            let px = CGSize(width: r.width * Double(cg.width), height: r.height * Double(cg.height))
+            print(String(format: "  %-12@ %5.0f x %5.0f px  aspect %.3f%@",
+                         label as NSString, px.width, px.height,
+                         max(px.width, px.height) / max(min(px.width, px.height), 1),
+                         extra as NSString))
+        }
+
+        // Red — line profiles walked out from the centre.
+        if let f = FrameFinder.detect(in: cg) {
+            draw(f.rect, color(1, 0.15, 0.15))
+            report("FrameFinder", f.rect, f.unboundedEdges.isEmpty ? "  bounded"
+                   : "  unbounded: " + f.unboundedEdges.map(\.rawValue).sorted().joined(separator: ","))
+        } else {
+            print("  FrameFinder  no frame found")
+        }
+
+        guard let grid = ColorGrid.sample(cg, width: 1024) else { return }
+
+        // Blue — the nearest voted edge either side of the centre on each axis.
+        // Nearest rather than strongest: that is the same rule the centre-out
+        // walk uses, so the two differ only in how an edge is recognised.
+        let win = autoWindow(for: grid)
+        func bracket(_ o: EdgeVoting.Orientation, _ extent: Int) -> (Int, Int) {
+            let raw = EdgeVoting.candidates(in: grid, orientation: o,
+                                            window: win, minCoverage: 0.50)
+            let found = EdgeVoting.merged(raw, within: max(2, extent / 200),
+                                          nearest: extent / 2)
+            let mid = extent / 2
+            // Strongest on each side, not nearest. Nearest picks whatever the
+            // photograph happens to have closest to the middle, which on an
+            // interior is a doorframe — measured, and it produced a crop of a
+            // picture hanging on a wall inside the negative.
+            let lo = found.filter { $0.index < mid }.max { $0.strength < $1.strength }
+            let hi = found.filter { $0.index > mid }.max { $0.strength < $1.strength }
+            return (lo?.index ?? 0, hi?.index ?? (extent - 1))
+        }
+        let (vl, vr) = bracket(.vertical, grid.width)
+        let (ht, hb) = bracket(.horizontal, grid.height)
+        let voted = CGRect(
+            x: Double(vl) / Double(grid.width), y: Double(ht) / Double(grid.height),
+            width: Double(vr - vl) / Double(grid.width),
+            height: Double(hb - ht) / Double(grid.height))
+        if voted.width > 0, voted.height > 0 {
+            draw(voted, color(0.25, 0.45, 1))
+            report("EdgeVoting", voted)
+        } else {
+            print("  EdgeVoting   no bracketing edges")
+        }
+
+        // Green — connected region. Drawn as the oriented quadrilateral it
+        // actually produces, not an upright box: the rotation is the thing this
+        // method has that the others don't, and squaring it off would hide it.
+        var all: [Double] = [], centre: [Double] = []
+        for y in 0..<grid.height {
+            for x in 0..<grid.width {
+                let v = grid[x, y].luminance
+                all.append(v)
+                if y >= grid.height * 3 / 8, y < grid.height * 5 / 8,
+                   x >= grid.width * 3 / 8, x < grid.width * 5 / 8 { centre.append(v) }
+            }
+        }
+        let swept = band.map { FrameRegion.detect(in: cg, band: $0).map {
+            FrameRegion.SweepResult(frame: $0, stableSteps: 0, thresholds: 0...0) } }
+            ?? FrameRegion.detectBySweep(in: cg)
+        if let s = swept {
+            let r = s.frame
+            let cxp = r.center.x * Double(w), cyp = (1 - r.center.y) * Double(h)
+            let hw = r.size.width * Double(w) / 2, hh = r.size.height * Double(h) / 2
+            // Negated: the result's angle is clockwise in a y-down picture, the
+            // context is y-up.
+            let a = -r.angle * .pi / 180
+            let corners = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)].map {
+                CGPoint(x: cxp + $0.0 * cos(a) - $0.1 * sin(a),
+                        y: cyp + $0.0 * sin(a) + $0.1 * cos(a))
+            }
+            ctx.setStrokeColor(color(0.1, 0.9, 0.3))
+            ctx.beginPath()
+            ctx.move(to: corners[3])
+            for c in corners { ctx.addLine(to: c) }
+            ctx.strokePath()
+            report("FrameRegion",
+                   CGRect(x: 0, y: 0, width: r.size.width, height: r.size.height),
+                   String(format: "  angle %+.2f°  stable over %d thresholds (%.2f–%.2f)%@",
+                          r.angle, s.stableSteps, s.thresholds.lowerBound, s.thresholds.upperBound,
+                          r.touchesBorder ? "  touches border" : ""))
+        } else {
+            print("  FrameRegion  no stable region — no threshold answer exists here")
+        }
+
+        guard let image = ctx.makeImage() else { print("  could not render"); return }
+        let outPath = out ?? ((path as NSString).deletingPathExtension + "-crop.jpg")
+        guard let dest = CGImageDestinationCreateWithURL(
+            URL(fileURLWithPath: outPath) as CFURL, "public.jpeg" as CFString, 1, nil) else {
+            print("  could not open \(outPath)")
+            return
+        }
+        CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: 0.92] as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else { print("  could not write \(outPath)"); return }
+        print("  → \(outPath)")
+    }
+
+
+    /// Print the row and column profiles a crop detector sees, as bars.
+    ///
+    /// Thresholds for "this line is unexposed film" cannot be reasoned out from
+    /// first principles — they depend on the film stock, the light table and the
+    /// exposure. This shows the actual populations so they can be read off, and
+    /// makes it obvious when two of them overlap.
+    @CameraActor
+    static func runCropProfile(path: String?) async throws {
+        let data: Data
+        let source: String
+        if let path {
+            data = try Data(contentsOf: URL(fileURLWithPath: path))
+            source = (path as NSString).lastPathComponent
+        } else {
+            let sess = try await openSession(); defer { sess.close() }
+            let props = CameraProperties(session: sess)
+            let lv = LiveView(session: sess, properties: props)
+            try await lv.start()
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            data = try await lv.fetchOnePreview()
+            try? await lv.stop()
+            source = "live view"
+        }
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let cg = CGImageSourceCreateImageAtIndex(src, 0, nil),
+              let grid = ColorGrid.sample(cg, width: 192) else {
+            print("could not decode \(source)")
+            return
+        }
+        print("source: \(source)  \(cg.width)x\(cg.height)  →  grid \(grid.width)x\(grid.height)")
+
+        // The walk as the finder actually runs it: each axis measured over the
+        // extent the other one found, which is not the same profile as the
+        // whole-image one printed below.
+        let cx = grid.width / 2, cy = grid.height / 2
+        let seed = max(1, grid.height / 4)
+        let cols = FilmProfile.build(from: grid, axis: .vertical,
+                                     across: max(0, cy - seed)...min(grid.height - 1, cy + seed))
+        print("\nWALK — columns, seeded over the middle band of rows")
+        print(FrameFinder.describeWalk(cols, from: cx), terminator: "")
+        if let (l, r) = FrameFinder.walkBothWays(cols, from: cx) {
+            let rows = FilmProfile.build(from: grid, axis: .horizontal,
+                                         across: l.index...r.index)
+            print("\nWALK — rows, over columns \(l.index)...\(r.index)")
+            print(FrameFinder.describeWalk(rows, from: cy), terminator: "")
+        }
+
+        for axis in [FilmProfile.Axis.vertical, .horizontal] {
+            let p = FilmProfile.build(from: grid, axis: axis)
+            let name = axis == .vertical ? "COLUMNS (x →)" : "ROWS (y ↓)"
+            print("\n\(name)  \(p.count) lines")
+            print(String(format: "  level    median %.3f  p05 %.3f  p95 %.3f",
+                         p.median(\.level), p.quantile(0.05, \.level), p.quantile(0.95, \.level)))
+            print(String(format: "  roughness median %.4f  p05 %.4f  p95 %.4f",
+                         p.median(\.roughness), p.quantile(0.05, \.roughness),
+                         p.quantile(0.95, \.roughness)))
+            print(String(format: "  deviation median %.4f", p.median(\.deviation)))
+
+            let maxRough = max(p.quantile(1.0, \.roughness), 1e-9)
+            print("   idx  level                     roughness")
+            // Every other line keeps the table readable while still resolving a
+            // band a few lines thick.
+            for i in stride(from: 0, to: p.count, by: 2) {
+                let l = p[i]
+                print(String(format: "  %4d  %.3f %@  %.4f %@",
+                             i, l.level, bar(l.level, max: 1.0, width: 20) as NSString,
+                             l.roughness, bar(l.roughness, max: maxRough, width: 20) as NSString))
+            }
+        }
+    }
+
+    nonisolated static func bar(_ v: Double, max m: Double, width: Int) -> String {
+        let n = Int((min(max(v, 0), m) / m * Double(width)).rounded())
+        return String(repeating: "█", count: n) + String(repeating: "·", count: width - n)
     }
 
     /// Measure how this body's rendered live-view frames respond to a change in
@@ -793,6 +1398,8 @@ struct DebugCLI {
           meter [SECONDS]         LV + drain shutterspeed events (default 8s)
           events [SECONDS]        LV + dump ALL events (default 5s)
           set-kelvin K            Set WB temperature the way the app does (mode + value)
+          detect-crop [PATH]      Auto-crop a JPEG, or one freshly grabbed LV frame
+          crop-profile [PATH]     Row/column profiles + the edge walk, as bars
           wb-probe                Sweep colour temperature under LV, fit the body's response
           clock                   Read camera clock + host drift
           sync-clock              Sync camera to host LOCAL wall clock

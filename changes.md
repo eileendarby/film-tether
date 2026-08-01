@@ -2,6 +2,89 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-07-30 — Auto-crop, part 2: find the frame by walking out from under the lens
+
+Replaces the strip detector from part 1. That one profiled the whole picture,
+decided which way the film ran, then picked the frame containing the centre. On
+the two real captures we have it got the axis wrong on one and reported six
+inter-frame gaps on the other — which is a negative filling the entire frame
+with no edges visible anywhere.
+
+`FrameFinder` instead starts at the point under the lens and walks outwards
+along each axis until it runs into unexposed film. The frame under the lens is
+then correct by construction rather than chosen afterwards, and a single sheet
+and a strip of frames are the same problem.
+
+**Finding the edges by texture, not exposure.** The obvious signal is
+brightness, which is what croppy keys on, but it can't tell unexposed film from
+a blown-out sky or a black shadow and it moves with every exposure change.
+Variance is no better: a line crossing a smooth gradient — a sky, a wall, the
+light table's own falloff — has a large spread while carrying no detail.
+
+What works is **mean neighbour-to-neighbour difference along the line**. It sees
+only local change, so a gradient scores near zero and picture detail scores high
+regardless of exposure. Measured per column on the 120 strip:
+
+| region | level | roughness |
+| --- | --- | --- |
+| picture | 0.19–0.51 | 0.029–0.074 |
+| unexposed rebate | 0.67–0.78 | 0.0124–0.0141 |
+| holder beyond the film | 0.004–0.017 | 0.0002–0.0013 |
+
+Three populations, two clear gaps, and the ordering doesn't depend on whether
+the film reads dark or light — so reversal film works the same way.
+
+**Two failures the real negative found, which synthetic tests would not have.**
+
+1. *A smooth bright wall inside the photograph* passed both the smoothness and
+   the level test and cut the frame short by an eighth of its height. What
+   separates it from a real edge is that exposed and unexposed film meet at a
+   **step** — that discontinuity is what makes an edge visible at all — while a
+   featureless part of a picture blends into its surroundings. Measured: 0.023
+   for the false patch against 0.17, 0.31 and 0.39 for the three real edges.
+2. The step has to be measured *at the transition*, not against the whole smooth
+   run. A picture fading gradually into the rebate is one continuous run, and
+   averaging over all of it borrows the rebate's brightness to justify stopping
+   at the near end of the fade.
+
+Both thresholds are relative to what the *picture* looks like, sampled around
+the starting point rather than over the whole profile. Sampling the whole
+profile is wrong whenever unexposed film occupies a large share of the view:
+with a single sheet the profile median *is* the band level, so the level test
+compares the band against itself and no edge is ever found. Caught by a test,
+not by the samples — neither of those has that geometry.
+
+**Results on the real captures:**
+
+- 120 strip: 5248 × 5122 px, **aspect 1.024**, bounded on all four sides,
+  matched against `120mm Rollei` at 2.4% — a 6×6 frame. The whole-picture
+  bounding box, for comparison, spans several frames and reports 1.457.
+- Negative with no visible edges: **refused**, where the strip detector claimed
+  six separators.
+
+**New:**
+
+- `Sources/Scan/FrameFinder.swift` — the walk.
+- `Sources/Scan/FilmProfile.swift` — per-line statistics and `ColorGrid`, the
+  reusable sampling core. Colour is carried through, not just luminance, so the
+  film base's own colour is available later for white balance.
+- `Tests/ScanTests/FrameFinderTests.swift` — 10 tests: single sheet, strip with
+  the middle frame picked, the starting point selecting a different frame,
+  reversal polarity, running off the picture, refusing when nothing is visible,
+  the smooth-patch regression, a scratch not ending the frame, and margins.
+- `Sources/Debug/DebugCLI.swift` — `crop-profile`, which prints the row and
+  column profiles as bars plus the walk's own decisions with the thresholds in
+  force. The thresholds above were read off its output; they can't be reasoned
+  out from first principles because they depend on the film, the light table and
+  the exposure.
+
+**Removed:** `CropDetector.detectFrameInStrip` and its tests, superseded.
+`CropDetector.detect` stays for the coarse "is there film in view" question.
+
+**Still to come on this feature:** the still-for-5-seconds trigger, the
+interactive crop box, size locking across a session with the "reuse previous
+crop size" button, and storing corners in scanned-image coordinates.
+
 ## 2026-07-30 — Fix the menu bar: an unusable View menu, and blank space in several others
 
 The View menu opened, closed itself immediately, and couldn't be reopened.
@@ -288,6 +371,109 @@ interpolated against its reference WB tables.
 decodes these CR3 files natively — `CGImageSourceCreateThumbnailAtIndex` on the
 R5's output produced a correct image with no third-party code. The Canon CR3
 spec may not need to be touched at all.
+
+## 2026-07-29 — Auto-crop, part 1: film-size catalogue and crop detection
+
+First half of roadmap item 1 — the analytical core, which is testable without a
+camera. The interactive crop box, the "frame has been still for 5s" trigger, and
+size locking across a session come next.
+
+**Film-size catalogue** (`Sources/Scan/FilmSize.swift`) mirrors the website
+database, **including its numeric IDs**, which travel over the REST API and into
+the sidecar verbatim and must never be renumbered to suit local ordering. The
+built-in list is a seed only, since the operator has to be able to edit it
+in-app.
+
+**Finding that shapes the whole feature: aspect ratio alone cannot identify
+these formats.** `4x5` and `8x10` share an aspect ratio exactly, as do `35mm`
+and `6x9`, and `5x7` / `2.25x3.25` / `11x14` / `3.25x4.25` all sit within a few
+percent of their neighbours. Identifying a format therefore needs *absolute*
+size, which needs a mm-per-pixel scale — and the camera can't report its height
+above the copy stand.
+
+So the matcher works in two modes: without a scale it returns a ranked list of
+everything the shape permits and callers must expect more than one; with a scale
+it separates them by real size. `FilmSizeMatcher.mmPerPixel(cropSize:isSize:)`
+learns the scale from one negative the operator has confirmed, which stays valid
+while the rig geometry is unchanged. Confirming a size after a rig adjustment
+simply re-calibrates, so the arrangement is self-healing.
+
+`35mm` and `35mm slide` are recorded as permanently indistinguishable: both are
+24×36mm frames and the difference is the cardboard mount, so no measurement will
+ever separate them and the operator must choose. `6x9` and `2.25x3.25` are
+deliberately *not* in that group — they're within half a percent on overall size
+but differ ~4% in shape, so a clean detection does favour one.
+
+Two of my own errors here were caught by tests rather than by review, which is
+why the dimensions are worth trusting: an early draft used invented per-format
+"usable image area" figures that gave `4x5` and `8x10` a 1% difference in aspect
+ratio, fabricating a distinction that doesn't physically exist. Nominal film
+dimensions are now used consistently — consistency matters more than absolute
+accuracy, because the scale is calibrated with the same numbers, so a systematic
+offset cancels out. A second draft wrongly claimed `6x9`/`2.25x3.25` were
+identical in shape; they aren't.
+
+**Crop detection** (`Sources/Scan/CropDetector.swift`) estimates the background
+from the border ring, marks pixels unlike it, and takes the bounding box of the
+row/column projection profiles. Deliberately not edge detection: film grain,
+dust and sprocket holes all generate edges in quantity. Working on projections
+is what makes dust harmless — an isolated speck adds one count to its row and is
+filtered by the coverage threshold, while a real film edge adds a count to every
+row it spans. A median (not mean) background estimate keeps a negative that runs
+off the frame edge from dragging the estimate toward the content. Analysis runs
+on a 256px downsample, since the negative's edges are a large-scale feature and
+this has to keep up with a live preview.
+
+Detection is polarity-agnostic — it looks for *difference* from the background,
+not brightness — because a dense negative is darker than the light table while a
+masked holder is brighter. Both are tested, as is the low-contrast dense
+negative that Alex flagged as the case that fools auto-crop.
+
+**Roll film: picking one frame out of a strip.** Tested against a real 120
+negative on the copy stand, the whole-negative detector was useless — roll film
+isn't one negative with a tidy surround, it's a continuous strip running off both
+sides of the picture, and the detector confidently returned the entire frame
+(93.5% coverage) as if that were a crop.
+
+`detectFrameInStrip` finds the frame under the lens instead. Three things had to
+be right, and each was corrected by measurement rather than by reasoning:
+
+1. **Which way the strip runs.** First attempt picked whichever axis found more
+   separators, and chose wrong on the real strip — analysing across the wrong
+   axis estimates the background from border pixels that are themselves image
+   content, and the resulting garbage profile happily yields separators. The
+   film's own long edges are the reliable signal: a strip is bounded across its
+   width and runs off the picture along its length. (This only worked once a
+   plain bug was fixed — `detect` computed its unbounded-edge set and then never
+   passed it to the result, so it was always empty.)
+2. **Uniformity is not sufficient to find the gaps.** Unexposed film carries no
+   image so its variance collapses, which is the right idea, but on the real
+   strip the median column deviation was 0.070 and the quietest column still
+   0.028 — no threshold separates them cleanly.
+3. **Level is the discriminator that works.** Unexposed film is *clear*, so it
+   passes far more light than any exposed frame: the gaps measured 0.60–0.62
+   against a strip median near 0.54. Requiring uniform **and** off-level finds
+   them, and keeps a flat patch of sky inside a frame — uniform but at the usual
+   level — from splitting a frame in two. Compared as an absolute difference so
+   it also holds for reversal film, where the gap is dark instead.
+
+On the live 120 strip this now reports a horizontal strip with 3 separators and a
+638×613px frame, and the size matcher returns `120mm Rollei` as the only
+candidate — correct. The 4% departure from square is the film's rebate: the
+cross-axis extent is the full width of the film rather than the exposed image
+area, which is a refinement still to make.
+
+- `Tests/ScanTests/FilmSizeTests.swift`, `CropDetectorTests.swift` — 32 tests,
+  including the catalogue's exact IDs and names (a renumbering would silently
+  mislabel every scan already recorded), the ambiguity pairs, calibrate-then-
+  identify across formats, dust rejection, and margin clamping so breathing room
+  can't push corners outside the frame.
+- `Sources/Debug/DebugCLI.swift` — `detect-crop [path]` runs detection on a JPEG
+  or a fresh live-view frame and prints the rect, coverage, aspect and candidate
+  formats. Synthetic tests only prove the arithmetic; thresholds have to be
+  judged against real negatives on the real light table, and this is how that's
+  done without going through the GUI. `Scan` added as a dependency of the debug
+  target to make this possible.
 
 ## 2026-07-28 — Fix the window shrinking past its own controls, and a frozen clock readout
 
