@@ -263,7 +263,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let doubled = i > 0 && menu.items[i - 1].isSeparatorItem
                     out += "    ---------\(doubled ? "  ⚠️ doubled" : "")\n"
                 } else {
-                    out += "    \(sub.title)\(sub.submenu != nil ? " ▸" : "")\n"
+                    // Alternates flagged: they are hidden until a modifier is
+                    // held, so an unexpected one is invisible in a plain listing
+                    // and is exactly the kind of thing that draws as a blank row.
+                    out += "    \(sub.title)\(sub.submenu != nil ? " ▸" : "")\(sub.isAlternate ? "  (alt)" : "")\n"
                 }
             }
         }

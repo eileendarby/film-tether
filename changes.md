@@ -2,6 +2,28 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-08-01 — Fix a 16-second hang on the first click of the app menu
+
+Clicking **Film Tether** in the menu bar froze the interface for about sixteen
+seconds the first time, and left the menu's last item blank while it did.
+
+`MenuBarTidy` walked the menu bar recursively. Reading `items` on a menu is what
+makes the system populate it, and the **Services** submenu populates by asking
+every application on the machine what it can do — so the tidy was triggering a
+full Services enumeration on the main thread, every launch, to look for stray
+separators in a menu it doesn't own.
+
+Measured on the first click: **16.24 s** before, **0.22 s** after, with a second
+click at 0.19 s.
+
+Two changes, both narrowing what the tidy touches:
+
+- It no longer recurses. Nothing it fixes is ever nested — the debris sits at
+  the top level of each menu, and everything below that belongs to the system.
+- The tracking notification fires for *every* menu, including each top-level
+  menu as it opens and the toolbar's own pickers. It now acts only on the menu
+  bar itself.
+
 ## 2026-08-01 — Live view reads as a lamp
 
 The live-view button said "Live View ON" or "Live View OFF". It now shows a

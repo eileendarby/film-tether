@@ -50,16 +50,12 @@ enum MenuBarTidy {
         NotificationCenter.default.addObserver(
             forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main
         ) { note in
-            guard let menu = note.object as? NSMenu else { return }
-            // Individual menus post this too, and they have to be handled:
-            // AppKit fills a submenu just before *it* displays, not when the bar
-            // is first clicked, so anything inserted at that point is invisible
-            // to a pass that only runs on the menu bar.
-            if menu === NSApp.mainMenu {
-                tidy(menu, isMenuBar: true)
-            } else {
-                tidy(menu)
-            }
+            // Only the menu bar. This notification fires for *every* menu —
+            // each top-level menu as it opens, the toolbar's own pickers, and
+            // the system's submenus — and tidying those means touching menus we
+            // don't own for no benefit.
+            guard let menu = note.object as? NSMenu, menu === NSApp.mainMenu else { return }
+            tidy(menu, isMenuBar: true)
             onTidied?()
         }
         // Also after tracking ends: anything AppKit adds between "about to
@@ -67,6 +63,35 @@ enum MenuBarTidy {
         NotificationCenter.default.addObserver(
             forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main
         ) { _ in onTidied?() }
+        tidy(NSApp.mainMenu, isMenuBar: true)
+        // And again once SwiftUI has finished building the menu bar. The pass
+        // above runs from `applicationDidFinishLaunching`, which is too early —
+        // the menus barely exist yet, so it cleans almost nothing and the first
+        // click is left meeting an untidied menu bar. That first click is
+        // exactly when the debris is visible: measured, the app menu opened with
+        // a blank row at the bottom, and looked right on every subsequent open
+        // because by then a tracking pass had cleaned it.
+        for delay in [0.5, 1.5, 3.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                populateThenTidy()
+            }
+        }
+    }
+
+    /// A tidy once SwiftUI has finished building the menu bar.
+    ///
+    /// The pass in `install()` runs from `applicationDidFinishLaunching`, which
+    /// is too early — the menus barely exist yet, so it cleans almost nothing
+    /// and the first click is left meeting an untidied menu bar.
+    ///
+    /// It does **not** fix the app menu's "Quit and Close All Windows", which is
+    /// what renders as a blank row on the first open. That item is inserted when
+    /// the menu displays, after every hook available here; logging every
+    /// alternate this class sees turned up only File's "Close All", never the
+    /// app menu's. Asking the menu to `update()` first doesn't surface it, and
+    /// marking the window non-restorable doesn't prevent it. It is left alone
+    /// rather than papered over.
+    private static func populateThenTidy() {
         tidy(NSApp.mainMenu, isMenuBar: true)
     }
 
@@ -90,22 +115,32 @@ enum MenuBarTidy {
     /// menu opened in front of it proves nothing.
     static var onTidied: (() -> Void)?
 
+    /// Tidy the menu bar's own menus — File, Edit, View and the rest — and
+    /// nothing nested inside them.
+    ///
+    /// **Not recursive, deliberately.** Reading `items` on a menu is what makes
+    /// the system populate it, and the Services submenu populates by asking
+    /// every application on the machine what it can do. Recursing into it cost
+    /// **16 seconds** on the first click of the app menu, measured — the app
+    /// appeared to hang. Nothing this class fixes is ever nested anyway: the
+    /// debris it removes sits at the top level of each menu, and the submenus
+    /// below that belong to the system.
     static func tidy(_ menu: NSMenu?, isMenuBar: Bool = false) {
         guard let menu else { return }
-        for item in menu.items {
-            if let sub = item.submenu { tidy(sub) }
-        }
-        if !isMenuBar {
+        guard isMenuBar else {
             removeUnwanted(menu)
             removeDuplicates(menu)
             normalizeSeparators(menu)
+            return
         }
-        // The menu bar's own items are the top-level titles; a title whose menu
-        // has nothing in it is worse than no title at all.
-        if isMenuBar {
-            for item in menu.items where item.submenu?.items.isEmpty == true {
-                menu.removeItem(item)
-            }
+        for item in menu.items {
+            guard let sub = item.submenu else { continue }
+            tidy(sub)
+        }
+        // A top-level title whose menu has nothing in it is worse than no title
+        // at all — it opens and dismisses itself.
+        for item in menu.items where item.submenu?.items.isEmpty == true {
+            menu.removeItem(item)
         }
     }
 
