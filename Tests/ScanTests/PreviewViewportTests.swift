@@ -225,3 +225,39 @@ final class PreviewViewportTests: XCTestCase {
         XCTAssertEqual(rect.midY, c.y, accuracy: 1e-6)
     }
 }
+
+// MARK: - Fitting the picture in the pane
+
+extension PreviewViewportTests {
+
+    /// A pane wider than the picture letterboxes left and right, and the
+    /// picture is centred in what's left.
+    func testAWidePaneLetterboxesSideways() {
+        let r = PreviewViewport.fittedRect(aspect: 1.5, in: CGSize(width: 1000, height: 500))
+        XCTAssertEqual(r.height, 500, accuracy: 1e-6)
+        XCTAssertEqual(r.width, 750, accuracy: 1e-6)
+        XCTAssertEqual(r.minX, 125, accuracy: 1e-6)
+        XCTAssertEqual(r.minY, 0, accuracy: 1e-6)
+    }
+
+    func testATallPaneLetterboxesAboveAndBelow() {
+        let r = PreviewViewport.fittedRect(aspect: 1.5, in: CGSize(width: 600, height: 800))
+        XCTAssertEqual(r.width, 600, accuracy: 1e-6)
+        XCTAssertEqual(r.height, 400, accuracy: 1e-6)
+        XCTAssertEqual(r.minY, 200, accuracy: 1e-6)
+    }
+
+    /// The letterbox is the room the crop box's rotate handles reach into, so a
+    /// pane that exactly matches the picture leaves none — worth pinning, since
+    /// it's the case where those handles are hardest to reach.
+    func testAMatchingPaneLeavesNoLetterbox() {
+        let r = PreviewViewport.fittedRect(aspect: 2, in: CGSize(width: 800, height: 400))
+        assertRect(r, CGRect(x: 0, y: 0, width: 800, height: 400), accuracy: 1e-6)
+    }
+
+    func testDegenerateFitFallsBackToTheWholePane() {
+        let pane = CGSize(width: 300, height: 200)
+        assertRect(PreviewViewport.fittedRect(aspect: 0, in: pane),
+                   CGRect(origin: .zero, size: pane), accuracy: 1e-6)
+    }
+}

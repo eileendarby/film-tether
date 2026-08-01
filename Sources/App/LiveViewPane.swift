@@ -87,6 +87,22 @@ struct LiveViewPane: View {
                 }
                 .aspectRatio(model.previewAspectRatio, contentMode: .fit)
             }
+            // The crop box, over the image and under the navigator. Only at Fit:
+            // at 100% the pane is a window onto part of the frame, so a box
+            // drawn in pane coordinates wouldn't sit where it claims to.
+            if model.cropRect != nil, model.previewZoom == .fit {
+                // Deliberately *not* aspect-fitted: the overlay covers the whole
+                // pane and finds the picture inside it, so the rotate handles
+                // can reach into the letterbox. Clipped to the picture, a crop
+                // taken to the negative's edge has no reachable rotate zone on
+                // that side at all.
+                CropOverlay(rect: Binding(get: { model.cropRect ?? .zero },
+                                          set: { model.cropRect = $0 }),
+                            fineRotation: Binding(get: { model.previewFineRotation },
+                                                  set: { model.previewFineRotation = $0 }),
+                            imageAspect: model.previewAspectRatio,
+                            isEditing: model.isCropEditing)
+            }
             // Overview of the whole frame with the visible region marked, sat in
             // the bottom-right corner. Only while zoomed, and only when there's
             // somewhere to pan to.

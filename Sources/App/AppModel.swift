@@ -5,6 +5,7 @@ import os
 import Camera
 import Hotkey
 import Scan
+import ImageIO
 
 private let appLog = Logger(subsystem: "co.wonders.filmtether", category: "AppModel")
 private let hotkeyLog = Logger(subsystem: "co.wonders.filmtether", category: "Hotkey")
@@ -316,6 +317,216 @@ final class AppModel: ObservableObject {
         await withLVPriority { try? await lz.setZoomPosition(x: x, y: y) }
     }
 
+    // MARK: - Straightening
+
+    /// Rotation beyond the quarter turn, in degrees clockwise.
+    ///
+    /// This is what the crop box's rotate handles drive. It turns the *picture*
+    /// under a crop box that stays square to the screen, which is how
+    /// straightening works everywhere else and the only arrangement in which the
+    /// operator can see whether a film edge has been brought level.
+    var previewFineRotation: Double {
+        get { AppSettings.shared.previewFineRotation }
+        set {
+            AppSettings.shared.previewFineRotation = min(max(newValue, -45), 45)
+            objectWillChange.send()
+        }
+    }
+
+    /// The whole rotation applied to the preview, normalized to 0..<360.
+    var totalRotationDegrees: Double {
+        let raw = Double(previewRotation.rawValue) + previewFineRotation
+        return raw.truncatingRemainder(dividingBy: 360) + (raw < 0 ? 360 : 0)
+    }
+
+    /// Label for the rotation button: whole degrees while unstraightened, one
+    /// decimal once it isn't, because a tenth of a degree is a visible amount of
+    /// straightening on a 5000-pixel negative.
+    var rotationLabel: String {
+        previewFineRotation == 0
+            ? "\(previewRotation.rawValue)°"
+            : String(format: "%.1f°", totalRotationDegrees)
+    }
+
+    func resetFineRotation() {
+        guard previewFineRotation != 0 else { return }
+        previewFineRotation = 0
+        showNotice("Straightening cleared")
+    }
+
+    // MARK: - Crop
+
+    /// The crop, in **display** space: normalized [0,1]², y-down, in the rotated
+    /// orientation on screen.
+    ///
+    /// Display space because straightening turns the picture *under* a box that
+    /// stays square to the screen. In sensor space that same box is a rotated
+    /// quadrilateral, and the editor would have to carry the angle through every
+    /// grip. Storing what's on screen keeps the editing arithmetic to
+    /// rectangles; the corners in the scanned image are recovered by undoing the
+    /// rotation, which is a single transform applied once.
+    ///
+    /// A quarter turn of the preview does move the box with the film — see
+    /// `rotatePreviewRight`.
+    @Published var cropRect: CGRect?
+
+    /// Format the session expects, carried from one negative to the next.
+    ///
+    /// An operator works through a stack of one format, so the last confirmed
+    /// one is a strong prior for the next — strong enough to reject a detection
+    /// whose shape no such frame could have. Persisted, because a session
+    /// usually resumes where it left off.
+    var expectedFilmSize: FilmSize? {
+        get { AppSettings.shared.expectedFilmSize }
+        set {
+            AppSettings.shared.expectedFilmSize = newValue
+            objectWillChange.send()
+        }
+    }
+
+    /// Pixel size of the most recent capture, so the crop can be reported in the
+    /// coordinates of the file it will be applied to rather than the preview's.
+    @Published private(set) var lastCaptureSize: CGSize?
+
+    /// Size the crop's corners are quoted in: the captured file when one has
+    /// arrived, the live frame until then.
+    var cropReferenceSize: CGSize? {
+        lastCaptureSize ?? latestFrame?.size
+    }
+
+    var isCropActive: Bool { cropRect != nil }
+
+    /// True while the box is being adjusted: handles showing, everything outside
+    /// darkened, and the overlay taking the pointer.
+    ///
+    /// Applying the crop drops out of this, because the overlay covers the whole
+    /// pane and would otherwise sit between the operator and every other tool —
+    /// the eyedropper and the metering box are both underneath it.
+    @Published private(set) var isCropEditing = false
+
+    /// The crop as applied, for whatever consumes it — the sidecar and the API,
+    /// once those exist.
+    struct AppliedCrop: Equatable {
+        /// Corners in display space, normalized and y-down.
+        var rect: CGRect
+        /// Straightening in force when it was applied, degrees clockwise.
+        var angle: Double
+        /// Corners in the reference image's pixels, if its size is known.
+        var pixels: CGRect?
+        var size: FilmSize?
+    }
+
+    @Published private(set) var appliedCrop: AppliedCrop?
+
+    /// Fix the crop and hand the interface back.
+    func applyCrop() {
+        guard let rect = cropRect else { return }
+        isCropEditing = false
+        appliedCrop = AppliedCrop(rect: rect, angle: totalRotationDegrees,
+                                  pixels: cropPixelRect, size: expectedFilmSize)
+        if let px = cropPixelRect {
+            showNotice(String(format: "Crop applied — %.0f,%.0f → %.0f,%.0f",
+                              px.minX, px.minY, px.maxX, px.maxY))
+        } else {
+            showNotice("Crop applied")
+        }
+        appLog.info("crop applied rect=\(String(describing: rect), privacy: .public) angle=\(self.totalRotationDegrees, privacy: .public)")
+    }
+
+    /// Go back to adjusting an applied crop.
+    func editCrop() {
+        guard cropRect != nil else { return }
+        isCropEditing = true
+    }
+
+    /// Slack added to a detected crop, as a fraction of its own size.
+    ///
+    /// Detection stops on the boundary it found, so a crop taken exactly there
+    /// can shave the outermost row of picture. On a 5300-pixel-wide 120 frame
+    /// this works out at about 13 px overall, under 7 px a side — enough to stop
+    /// the crop biting into the image, small enough that it doesn't visibly
+    /// admit rebate.
+    static let autoCropSlack = 0.0025
+
+    /// Find the frame and put a crop box on it.
+    ///
+    /// Runs against the *unadjusted* frame — the JPEG exactly as the camera sent
+    /// it. Inversion, monochrome and white-balance gains are all display
+    /// corrections, and detection should see the film rather than the operator's
+    /// view of it.
+    func runAutoCrop() {
+        guard let jpeg = lastUnadjustedFrame else {
+            showNotice("No frame to crop — start live view first")
+            return
+        }
+        guard let src = CGImageSourceCreateWithData(jpeg as CFData, nil),
+              let raw = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+            showNotice("Couldn't read the frame")
+            return
+        }
+        // Detect on the frame as displayed, not as captured: the crop is stored
+        // in display space, and rotating the *result* instead would turn an
+        // upright rectangle into a tilted one that no longer is one.
+        let turned = previewRotation.rotate(raw) ?? raw
+        let cg = FineRotation.rotate(turned, byDegrees: previewFineRotation) ?? turned
+        guard let plan = CropPlanner.plan(in: cg, expecting: expectedFilmSize) else {
+            showNotice("No negative found — set the crop by hand, or check the framing")
+            appLog.info("auto-crop: no plan")
+            return
+        }
+        cropRect = CropBox.sanitised(
+            CropBox.expanded(plan.rect, byFraction: Self.autoCropSlack))
+        isCropEditing = true
+        appliedCrop = nil
+
+        // Learn from a detection we believed, so the next negative has a prior.
+        // Only from `.detected`: the fallback's shape came *from* the
+        // expectation, so treating it as evidence would be circular.
+        if plan.route == .detected, let size = cropReferenceSize {
+            let px = CGSize(width: plan.rect.width * size.width,
+                            height: plan.rect.height * size.height)
+            let match = FilmSizeMatcher.bestMatch(forCropSize: px, in: FilmSize.seedCatalog)
+            if !match.isUnknown { expectedFilmSize = match }
+        }
+
+        let px = cropPixelRect
+        showNotice(String(
+            format: "Crop %@ — %.0f × %.0f%@",
+            plan.route.rawValue, px?.width ?? 0, px?.height ?? 0,
+            plan.anchoredEdge.map { " (anchored \($0.rawValue))" } ?? ""))
+        appLog.info("auto-crop \(plan.route.rawValue, privacy: .public) rect=\(String(describing: plan.rect), privacy: .public) steps=\(plan.stableSteps, privacy: .public)")
+    }
+
+    func clearCrop() {
+        cropRect = nil
+        isCropEditing = false
+        appliedCrop = nil
+        showNotice("Crop cleared")
+    }
+
+    /// Pixel dimensions of an image file, from its metadata alone.
+    ///
+    /// `CGImageSourceCopyPropertiesAtIndex` reads the header, so this costs
+    /// nothing next to a decode — which matters because it runs on every
+    /// capture, on files that are 8000 pixels wide and RAW.
+    private static func pixelSize(of url: URL) -> CGSize? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+              let w = props[kCGImagePropertyPixelWidth] as? Double,
+              let h = props[kCGImagePropertyPixelHeight] as? Double,
+              w > 0, h > 0
+        else { return nil }
+        return CGSize(width: w, height: h)
+    }
+
+    /// The crop in the reference image's pixels, for display.
+    var cropPixelRect: CGRect? {
+        guard let r = cropRect, let size = cropReferenceSize,
+              size.width > 0, size.height > 0 else { return nil }
+        return CGRect(x: r.minX * size.width, y: r.minY * size.height,
+                      width: r.width * size.width, height: r.height * size.height)
+    }
+
     // MARK: - Preview adjustments (monochrome + click white balance)
 
     /// Host-side preview corrections, proxied to AppSettings so they persist.
@@ -516,11 +727,21 @@ final class AppModel: ObservableObject {
     }
 
     func rotatePreviewRight() {
+        // The box is stored in display space, so a quarter turn of the view
+        // would otherwise leave it pointing at different film. Turning it the
+        // same way keeps it on the negative it was put on.
+        cropRect = cropRect.map { PreviewRotation.cw90.displayRect(fromSensor: $0) }
+        // The button is for getting the negative the right way up, so it lands
+        // on an exact quarter turn — straightening is a separate adjustment and
+        // carrying it through would mean the button never reaches 0/90/180/270.
+        previewFineRotation = 0
         previewRotation = previewRotation.rotatedRight
         appLog.info("preview rotation → \(self.previewRotation.rawValue, privacy: .public)°")
     }
 
     func rotatePreviewLeft() {
+        cropRect = cropRect.map { PreviewRotation.cw270.displayRect(fromSensor: $0) }
+        previewFineRotation = 0
         previewRotation = previewRotation.rotatedLeft
         appLog.info("preview rotation → \(self.previewRotation.rawValue, privacy: .public)°")
     }
@@ -920,7 +1141,9 @@ final class AppModel: ObservableObject {
         // Rotation is deliberately the LAST step of composition: every overlay
         // above was positioned in sensor space, so turning the finished frame
         // keeps the box glued to the image content instead of sliding off it.
-        let rotated = composed.map { previewRotation.rotate($0) }
+        let rotated = composed
+            .map { previewRotation.rotate($0) }
+            .map { FineRotation.rotate($0, byDegrees: previewFineRotation) }
 
         // Keep the newest *whole* frame for the navigator overview. Only frames
         // arriving while the body is at fit are whole — once punched in, the
@@ -1044,6 +1267,10 @@ final class AppModel: ObservableObject {
         if let result = captureResult {
             self.lastCapture = result.path.lastPathComponent
             self.capturedFiles.append(contentsOf: result.allPaths)
+            // Dimensions only — read from the file's metadata without decoding
+            // it. The crop is defined on the preview but applied to this, so its
+            // corners should be quoted in this file's pixels.
+            self.lastCaptureSize = Self.pixelSize(of: result.path) ?? self.lastCaptureSize
             self.snapshot.iso = result.iso ?? self.snapshot.iso
             self.snapshot.shutter = result.shutter ?? self.snapshot.shutter
             self.snapshot.aperture = result.aperture ?? self.snapshot.aperture

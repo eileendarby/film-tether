@@ -2,6 +2,187 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-08-01 — Live view reads as a lamp
+
+The live-view button said "Live View ON" or "Live View OFF". It now shows a
+small circle followed by "Live" — grey when the preview is stopped, green when
+it's running.
+
+The state is what you glance at between frames, and a colour reads faster than
+a word does. It also fixes a smaller annoyance: the label used to change length
+with the state, so the button resized and its neighbours shuffled every time
+live view started or stopped. A fixed word and a lamp keep it still, and the
+button is 48pt narrower than the longest of the two old labels.
+
+Still the current state rather than the action, matching the other toggles in
+that bar; the menu item stays phrased as a command, which is the macOS
+convention for menus.
+
+## 2026-07-31 — Apply the crop with Return, and a rotate button that lands square
+
+**The crop overlay was blocking everything underneath it.** It covers the whole
+pane — it has to, so the rotate handles can reach into the letterbox — which put
+it between the operator and the eyedropper, the metering box and every other
+tool while a crop was being adjusted.
+
+Return now **applies** the crop: the values are recorded, the handles and the
+dimming go, and the overlay stops taking the pointer. What's left is the box
+drawn as a hairline **white rectangle with a black one just outside it**. Two
+colours because one is never enough — a white line disappears into clear film
+base and a black one into a dense frame, and a single negative routinely has
+both within a few pixels of the crop's edge.
+
+Disabling the gesture wasn't sufficient, incidentally: a `.gesture` that is
+merely disabled still claims the pointer, so the layers underneath never see the
+click. It has to be absent rather than inert.
+
+**Two buttons instead of one.** **Auto-Crop** re-detects every time it's
+pressed and holds no state, so pressing it again after nudging the box by hand
+starts over. **Crop ON / Crop OFF** is greyed out until there's a crop and then
+shows which mode it's in — labelled with the state it *is* in rather than the
+one it would move to, matching every other toggle in that bar. Turning it off
+fixes the box; turning it back on returns the handles.
+
+Return does the same as turning it off. **Delete** clears the crop, but only
+while it's being adjusted — a settled crop shouldn't be lost to a stray
+keypress. Both are in the View menu alongside Auto-Crop.
+
+**The rotate button lands on an exact quarter turn**, clearing any straightening
+first. It's for getting the negative the right way up; carrying a fraction of a
+degree through it means the button never reaches 0/90/180/270 again.
+
+`AppModel.appliedCrop` holds the corners, the angle in force, and the pixel
+rect, ready for the sidecar and the API. The status bar marks an applied crop
+with a tick.
+
+## 2026-07-31 — Auto-crop leaves a little slack
+
+A detected crop sat exactly on the boundary the detector found, which is where
+the picture stops — so it was liable to shave the outermost row off. Film isn't
+always cut square enough for that last row to be worth defending, and a sliver of
+rebate is easy to pull back in by hand while the reverse isn't.
+
+Detected crops are now grown by **0.25% of their own size**, evenly on all
+sides. On a 5300-pixel-wide 120 frame that's about 13 px overall, under 7 px a
+side — in the 10–20 px range the breathing room was originally specified at.
+Proportional to the box rather than the frame, so the slack is the same relative
+amount whether the negative is 35mm or 8×10.
+
+`CropBox.expanded(_:byFraction:)`, with 4 tests — that it grows on-centre, that
+it's proportional to the box, and that it stops at the frame's edge.
+
+## 2026-07-31 — Crop cursors, and straightening from the rotate handles
+
+The crop box now tells you what a drag will do before you make it, and can
+straighten the negative as well as frame it.
+
+**Cursors.** Diagonal arrows on the corners, straight arrows on the edge
+handles, and a rotate cursor in a band *just outside* each of the eight grips.
+AppKit publishes neither a diagonal-resize nor a rotate cursor — Finder's are
+private (`_windowResizeNorthWestSouthEast` and friends) — so these are drawn
+from SF Symbols instead. Same shapes, they scale on a Retina display, and they
+can't break on an OS update the way an undocumented selector can. Each is white
+with a dark outline underneath, because the pointer sits over a negative that
+may be any brightness and a single-colour cursor vanishes into half of them.
+
+**Straightening.** Dragging a rotate zone turns the *picture* under a crop box
+that stays square to the screen, which is how straightening works everywhere
+else and the only arrangement where you can see whether a film edge has been
+brought level. The angle is the sweep about the box's centre, measured from
+where the drag began rather than accumulated per event, so clamping at the limit
+doesn't make the picture drift.
+
+The rotation button now reads the precise total — `268.5°` — and only shows a
+decimal once there is one. Option-click clears the straightening.
+
+**Two things kept deliberately separate.** The quarter turn and the fraction of
+a degree on top of it are stored apart, because a quarter turn moves pixels to
+new positions and loses nothing while any other angle has to resample. An
+unstraightened preview never pays that cost. And the rotate band sits *outside*
+the grips rather than inside, so resizing and straightening never compete for
+the same pixel: aiming at the box resizes, aiming just past it straightens.
+
+**The crop moved to display space.** Straightening turns the picture under the
+box, and in sensor space that box is a rotated quadrilateral — the editor would
+have to carry the angle through every grip. Storing what's on screen keeps the
+editing arithmetic to rectangles. A quarter turn of the preview still carries
+the box round with the film, and auto-crop now detects on the frame *as
+displayed* so its result is already in that space.
+
+**The overlay covers the whole pane, not just the picture.** The rotate handles
+live in a band *outside* the box, so a crop taken right up to the edge of the
+negative puts that band in the letterbox — and an overlay clipped to the picture
+never receives the pointer there, so those handles don't exist. Found on a real
+negative framed to the right-hand edge, where straightening from that side was
+impossible. The overlay now works out where the picture sits inside the pane and
+positions everything against that, leaving the band free to reach into the
+letterbox. Since the straightening angle is a single value, one reachable rotate
+zone anywhere around the box is enough.
+
+**New:**
+
+- `Sources/Scan/FineRotation.swift` — resampling rotation that keeps the
+  source's dimensions, so the picture's corners rotate out of view rather than
+  the frame growing to hold them. A canvas that grew with the angle would move
+  the image under a box that is trying to stay still.
+- `Sources/App/CropCursors.swift` — the cursors.
+- 7 more tests in `CropBoxTests`, including that a point inside the box is never
+  a rotate however close to an edge, and that the angle corrects for the pane's
+  aspect — without that a straightening drag runs fast on one axis and slow on
+  the other and stops tracking the pointer.
+
+## 2026-07-31 — Auto-crop in the app: a Crop button and an adjustable box
+
+The detector is wired in. **Crop** in the toolbar finds the negative under the
+lens and puts an editable box on it; clicking again clears it. No five-second
+still-frame trigger — a button is predictable, and detection that fires on its
+own while you're still positioning film is worse than no detection.
+
+The box has eight grips: four corners that move two sides each, four edge
+midpoints that move one. Drag inside to slide it whole. Everything outside is
+darkened so the crop reads at a glance, with thirds drawn inside it. The
+corners appear in the status bar and follow the box as it moves — quoted in the
+*captured file's* pixels once a capture has told us how big that is, and in the
+preview's until then.
+
+**Rotation is handled by converting, not by cases.** The crop is stored in
+sensor space so turning the preview doesn't move it, and the editor works
+entirely in the rotated space the operator is looking at, converting once on
+each side of the edit. Otherwise every grip would need to know which side of the
+sensor it currently corresponds to, and there are four rotations and eight grips.
+
+**Session memory.** A confirmed detection sets the expected film format, which
+persists across launches and is what the next negative's detection is checked
+against. Only `.detected` teaches it — the fallback's shape comes *from* the
+expectation, so learning from it would be circular.
+
+**New:**
+
+- `Sources/Scan/CropBox.swift` — hit-testing and drag arithmetic, plus
+  `PreviewRotation.displayRect`/`sensorRect`. Kept out of the view because
+  corner arithmetic is where crop editors go wrong in ways that are tedious to
+  find by hand: a corner dragged past its opposite, a box collapsing to nothing
+  and becoming impossible to grab again.
+- `Tests/ScanTests/CropBoxTests.swift` — 16 tests, including that a side dragged
+  past its opposite stops rather than inverting the rect, and that the rotation
+  round trip is exact so the box can't creep each time the preview is turned.
+- `Sources/App/CropOverlay.swift` — the overlay.
+
+**Changed:**
+
+- `Sources/App/AppModel.swift` — `cropRect` (sensor space), `runAutoCrop`,
+  `clearCrop`, `cropPixelRect`, and the captured file's pixel size, read from
+  its header rather than by decoding an 8000-pixel-wide RAW.
+- `Sources/App/AppSettings.swift` — the expected format persists, stored by the
+  catalogue's numeric id since that's the database's id and travels into the API
+  unchanged; the name would break on a rename.
+- `Sources/App/ExposureBar.swift`, `Sources/App/StatusFooter.swift`,
+  `Sources/App/LiveViewPane.swift` — button, readout, overlay.
+
+Available at Fit only. At 100% the pane shows a window onto part of the frame,
+so a box drawn in pane coordinates wouldn't sit where it claims to — the same
+reason the metering box and the eyedropper are disabled there.
+
 ## 2026-07-30 — Auto-crop, part 2: find the frame by walking out from under the lens
 
 Replaces the strip detector from part 1. That one profiled the whole picture,

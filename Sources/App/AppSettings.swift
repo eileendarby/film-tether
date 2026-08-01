@@ -35,6 +35,8 @@ final class AppSettings: ObservableObject {
         static let previewMonochrome = "previewMonochrome"
         static let previewInvert = "previewInvert"
         static let previewWhiteBalance = "previewWhiteBalance"
+        static let expectedFilmSizeID = "expectedFilmSizeID"
+        static let previewFineRotation = "previewFineRotation"
     }
 
     // MARK: - Defaults
@@ -245,6 +247,32 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    /// Straightening applied on top of the quarter-turn rotation, in degrees.
+    ///
+    /// Separate from `previewRotation` rather than folded into one angle,
+    /// because a quarter turn can be done exactly — the pixels are moved, not
+    /// resampled — and only the fraction of a degree on top of it needs
+    /// interpolating. Keeping them apart means an unstraightened preview stays
+    /// pixel-exact.
+    @Published var previewFineRotation: Double {
+        didSet { defaults.set(previewFineRotation, forKey: Key.previewFineRotation) }
+    }
+
+    /// Format the operator is currently working through.
+    ///
+    /// Stored as the catalogue's own numeric id, which is the website
+    /// database's id and travels unchanged into the API and the sidecar. Storing
+    /// the name instead would break the moment a row is renamed.
+    @Published var expectedFilmSize: FilmSize? {
+        didSet {
+            if let id = expectedFilmSize?.id, id != FilmSize.unknown.id {
+                defaults.set(id, forKey: Key.expectedFilmSizeID)
+            } else {
+                defaults.removeObject(forKey: Key.expectedFilmSizeID)
+            }
+        }
+    }
+
     // MARK: - Init
 
     private init() {
@@ -324,6 +352,11 @@ final class AppSettings: ObservableObject {
             invert: defaults.bool(forKey: Key.previewInvert),
             whiteBalance: storedWB
         )
+        self.previewFineRotation = defaults.double(forKey: Key.previewFineRotation)
+        let storedSizeID = defaults.object(forKey: Key.expectedFilmSizeID) as? Int
+        self.expectedFilmSize = storedSizeID.flatMap { id in
+            FilmSize.seedCatalog.first { $0.id == id }
+        }
         loadCaptureFolder()
     }
 }

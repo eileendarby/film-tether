@@ -47,6 +47,8 @@ struct ExposureBar: View {
             invertToggleButton()
             monoToggleButton()
             whiteBalanceButton()
+            autoCropButton()
+            cropToggleButton()
             peakingToggleButton()
             boxToggleButton()
         }
@@ -82,15 +84,21 @@ struct ExposureBar: View {
         Button {
             model.rotatePreviewRight()
         } label: {
-            Label(model.previewRotation.displayName, systemImage: "rotate.right")
+            Label(model.rotationLabel, systemImage: "rotate.right")
                 .labelStyle(.titleAndIcon)
                 // Fixed width so the neighbouring buttons don't shuffle as the
-                // angle changes, sized for the widest label: "270°" measures
-                // 29pt at the 13pt system font, plus a 15pt icon and ~5pt of
-                // Label spacing ≈ 49pt. The rest is slack.
-                .frame(width: 56, alignment: .leading)
+                // angle changes. Sized for the widest label, which is now a
+                // straightened one — "268.5°" rather than "270°".
+                .frame(width: 74, alignment: .leading)
         }
-        .help("Rotate the live preview 90° clockwise (Cmd-R; Cmd-Shift-R goes counter-clockwise). Display only — the camera and the saved files are untouched.")
+        .disabled(!model.isLiveViewOn)
+        .help(model.previewFineRotation == 0
+              ? "Rotate the live preview 90° clockwise (Cmd-R; Cmd-Shift-R goes counter-clockwise). Display only — the camera and the saved files are untouched."
+              : String(format: "Rotated 90° at a time, plus %.1f° of straightening from the crop box's rotate handles. Cmd-R turns; Cmd-Shift-R goes back. Option-click to clear the straightening.",
+                       model.previewFineRotation))
+        .simultaneousGesture(TapGesture().modifiers(.option).onEnded {
+            model.resetFineRotation()
+        })
     }
 
     /// Negative / positive toggle. The label names what you're currently
@@ -106,10 +114,10 @@ struct ExposureBar: View {
                           width: 82)
         }
         .help("Invert the preview so a negative shows as the positive image (Cmd-I). Judging framing and focus on an inverted image is guesswork. Display only — the captured RAW is still the negative.")
+        .disabled(!model.isLiveViewOn)
     }
 
-    /// Colour / B&W preview toggle. Enabled even with live view off, since it's
-    /// a property of the film you're about to scan, not of the stream.
+    /// Colour / B&W preview toggle.
     @ViewBuilder
     private func monoToggleButton() -> some View {
         let mono = model.previewAdjustments.monochrome
@@ -121,6 +129,7 @@ struct ExposureBar: View {
                           width: 62)
         }
         .help("Show the preview in black and white (Cmd-B). Raw pixels off a B&W negative carry no useful colour, so judging exposure and focus is easier without it. Display only — the camera and the saved files are untouched.")
+        .disabled(!model.isLiveViewOn)
     }
 
     /// Arms the eyedropper; the next click on the preview sets white balance.
@@ -144,6 +153,38 @@ struct ExposureBar: View {
               ? "Unavailable at 100%, where the pane shows a window onto the frame rather than the whole of it, so a click doesn't identify the pixel underneath it. Sample at Fit or 500%."
               : "Click here, then click the unexposed film base in the preview to neutralise its colour cast. The blue/amber half is sent to the camera as a colour temperature, so it reaches the captured RAW; the green/magenta half, which a Kelvin control can't express, is corrected on the preview. Click again to refine — each sample corrects what's left. Clear the preview part from the Preview menu.")
         .disabled(!model.canPickWhiteBalance)
+    }
+
+    /// Recalculates every time it's pressed, and holds no state of its own.
+    /// Pressing it again after nudging the box by hand starts over, which is the
+    /// point of having it separate from the toggle.
+    @ViewBuilder
+    private func autoCropButton() -> some View {
+        Button {
+            model.runAutoCrop()
+        } label: {
+            adaptiveLabel("Auto-Crop", systemImage: "crop", width: 96)
+        }
+        .help("Find the negative under the lens and put an adjustable crop box on it. Pressing it again re-detects from scratch. Uses the film format from the last confirmed crop to check the result, and to build one if detection can't be trusted.")
+        .disabled(!model.isLiveViewOn || model.previewZoom != .fit)
+    }
+
+    /// Whether the crop is interactive. Labelled with the state it is in rather
+    /// than the state it would move to, matching every other toggle here.
+    @ViewBuilder
+    private func cropToggleButton() -> some View {
+        let editing = model.isCropEditing
+        Button {
+            if editing { model.applyCrop() } else { model.editCrop() }
+        } label: {
+            adaptiveLabel(editing ? "Crop ON" : "Crop OFF",
+                          systemImage: editing ? "crop.rotate" : "rectangle.dashed",
+                          width: 90)
+        }
+        .help(editing
+              ? "Crop is being adjusted: drag its corners or edge handles, or the band just outside them to straighten the negative. Turning it off fixes the box in place and hands the interface back, so the eyedropper and the metering box can be reached again — Return does the same. Delete clears the crop."
+              : "Crop is fixed, drawn as a thin outline. Turn it back on to adjust the box.")
+        .disabled(!model.isCropActive)
     }
 
     @ViewBuilder
@@ -438,12 +479,22 @@ struct ExposureBar: View {
                 }
             }
         } label: {
-            // Reads as current state ("Live View ON"), not as the action it
-            // performs ("Stop Live View"), matching every other toggle in this
-            // bar. The menu item stays phrased as a command, which is the
-            // macOS convention for menus.
-            Text(model.isLiveViewOn ? "Live View ON" : "Live View OFF")
-                .frame(width: 104)
+            // A lamp rather than a word: the state is the thing you glance at
+            // between frames, and colour reads faster than reading. Still the
+            // current state and not the action it performs, matching every
+            // other toggle here — the menu item stays phrased as a command,
+            // which is the macOS convention for menus.
+            //
+            // The label doesn't change with the state, so the button never
+            // changes width and its neighbours never shuffle.
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(model.isLiveViewOn ? Color.green : Color.secondary.opacity(0.5))
+                    .frame(width: 11, height: 11)
+                Text("Live")
+                    .foregroundStyle(model.isLiveViewOn ? .primary : .secondary)
+            }
+            .frame(width: 48)
         }
         .keyboardShortcut("l", modifiers: [.command])
         .help(model.isLiveViewOn

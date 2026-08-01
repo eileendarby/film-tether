@@ -98,6 +98,19 @@ struct StatusFooter: View {
                     .foregroundStyle(.secondary)
                     .help("Host-side white-balance gains (R/G/B) sampled from the preview. Saved files are unaffected.")
             }
+            // The crop's corners, in the coordinates of the file it will be
+            // applied to once a capture has told us how big that is — the live
+            // preview's own pixels are not the ones the operator cares about.
+            if let px = model.cropPixelRect {
+                Text(String(format: "%@ %.0f,%.0f → %.0f,%.0f  (%.0f×%.0f)",
+                            model.isCropEditing ? "Crop" : "Crop ✓",
+                            px.minX, px.minY, px.maxX, px.maxY, px.width, px.height))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .help(model.lastCaptureSize == nil
+                          ? "Crop corners in live-preview pixels. They'll be restated in the captured file's pixels once a frame has been taken."
+                          : "Crop corners in the captured file's pixels.")
+            }
             Spacer()
             // Transient feedback for the eyedropper — a refused sample would
             // otherwise look like a click that simply did nothing.

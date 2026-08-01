@@ -61,6 +61,24 @@ public enum PreviewViewport {
         visibleSize.width < 0.999 || visibleSize.height < 0.999
     }
 
+    /// Where a frame of `aspect` sits inside a pane, letterboxed and centred.
+    ///
+    /// Needed by anything that has to draw *outside* the picture while still
+    /// positioning itself against it — the crop box's rotate handles reach into
+    /// the letterbox, and an overlay clipped to the picture would simply not
+    /// receive the pointer there.
+    public static func fittedRect(aspect: CGFloat, in pane: CGSize) -> CGRect {
+        guard aspect > 0, pane.width > 0, pane.height > 0 else {
+            return CGRect(origin: .zero, size: pane)
+        }
+        if pane.width / pane.height > aspect {
+            let w = pane.height * aspect
+            return CGRect(x: (pane.width - w) / 2, y: 0, width: w, height: pane.height)
+        }
+        let h = pane.width / aspect
+        return CGRect(x: 0, y: (pane.height - h) / 2, width: pane.width, height: h)
+    }
+
     /// Size for the navigator thumbnail, preserving `frameAspect` and fitting
     /// within `maxSize`.
     ///

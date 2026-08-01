@@ -88,11 +88,13 @@ struct FilmTetherApp: App {
                     model.rotatePreviewRight()
                 }
                 .keyboardShortcut("r", modifiers: [.command])
+                .disabled(!model.isLiveViewOn)
                 .help("Turn the live preview 90° clockwise. Cmd-R. Display only, and remembered across launches — the camera and the saved files are never rotated.")
                 Button("Rotate Preview Left") {
                     model.rotatePreviewLeft()
                 }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(!model.isLiveViewOn)
                 .help("Turn the live preview 90° counter-clockwise. Cmd-Shift-R.")
                 Divider()
                 Button(model.previewAdjustments.invert
@@ -100,12 +102,14 @@ struct FilmTetherApp: App {
                     model.toggleInvert()
                 }
                 .keyboardShortcut("i", modifiers: [.command])
+                .disabled(!model.isLiveViewOn)
                 .help("Invert the preview so a negative shows as the positive image. Cmd-I. Display only — the captured RAW is still the negative.")
                 Button(model.previewAdjustments.monochrome
                        ? "Show Preview in Color" : "Show Preview in Black & White") {
                     model.toggleMonochrome()
                 }
                 .keyboardShortcut("b", modifiers: [.command])
+                .disabled(!model.isLiveViewOn)
                 .help("Raw pixels off a B&W negative carry no useful colour. Cmd-B. Display only — the saved files are untouched.")
                 Button(model.isPickingWhiteBalance
                        ? "Cancel White Balance Pick" : "Pick White Balance from Preview…") {
@@ -118,6 +122,20 @@ struct FilmTetherApp: App {
                 }
                 .disabled(model.previewAdjustments.whiteBalance == nil)
                 .help("Drop the green/magenta correction the eyedropper applied to the preview. The camera's own colour temperature is left alone — change that from the toolbar.")
+                Divider()
+                Button("Auto-Crop") { model.runAutoCrop() }
+                    .disabled(!model.isLiveViewOn || model.previewZoom != .fit)
+                    .help("Find the negative under the lens and put an adjustable crop box on it.")
+                Button(model.isCropEditing ? "Turn Crop Off" : "Turn Crop On") {
+                    if model.isCropEditing { model.applyCrop() } else { model.editCrop() }
+                }
+                .keyboardShortcut(.return, modifiers: [])
+                .disabled(!model.isCropActive)
+                .help("Turning the crop off fixes the box in place and hands the interface back, so the eyedropper and the metering box can be reached again. Return.")
+                Button("Clear Crop") { model.clearCrop() }
+                    .keyboardShortcut(.delete, modifiers: [])
+                    .disabled(!model.isCropEditing)
+                    .help("Remove the crop. Delete. Only while it's being adjusted, so a settled crop can't be lost by a stray keypress.")
                 Divider()
                 Button(model.focusPeakingEnabled ? "Disable Focus Peaking" : "Enable Focus Peaking") {
                     model.focusPeakingEnabled.toggle()
