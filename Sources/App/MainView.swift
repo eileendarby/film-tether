@@ -14,6 +14,38 @@ struct MainView: View {
     private static let minPaneHeight: CGFloat = 420
 
     var body: some View {
+        HStack(spacing: 0) {
+            cameraColumn
+            if model.showArchiveTray {
+                Divider()
+                ArchiveTray(archive: model.archive)
+            }
+        }
+        .background(Color(NSColor.windowBackgroundColor))
+        // Offscreen copy of the icons-only bar, purely to learn its natural
+        // width. `.fixedSize` makes it report what it actually wants rather
+        // than accepting whatever the window currently offers; `.hidden` keeps
+        // it invisible, and as a background it can't affect the real layout.
+        .background(alignment: .topLeading) {
+            exposureBar(compact: true, stacked: true)
+                .fixedSize()
+                .background(WidthReporter { compactBarWidth = $0 })
+                .hidden()
+                .allowsHitTesting(false)
+        }
+        .background(
+            WindowMinContentSize(
+                // The tray is a fixed-width column beside the camera, so when
+                // it is open the floor is the toolbar plus the tray.
+                width: compactBarWidth + (model.showArchiveTray ? ArchiveTray.width + 1 : 0),
+                height: Self.minPaneHeight + chromeHeightEstimate
+            )
+        )
+    }
+
+    /// Preview, toolbar and footer — everything that was the whole window
+    /// before the tray.
+    private var cameraColumn: some View {
         ZStack {
             VStack(spacing: 0) {
                 // Deliberately the LOWEST layout priority, not the highest.
@@ -57,6 +89,7 @@ struct MainView: View {
                     ViewThatFits(in: .horizontal) {
                         exposureBar(compact: false)
                         exposureBar(compact: true)
+                        exposureBar(compact: true, stacked: true)
                     }
                     Spacer(minLength: 0)
                 }
@@ -71,34 +104,16 @@ struct MainView: View {
             }
             overlayContent()
         }
-        .background(Color(NSColor.windowBackgroundColor))
-        // Offscreen copy of the icons-only bar, purely to learn its natural
-        // width. `.fixedSize` makes it report what it actually wants rather
-        // than accepting whatever the window currently offers; `.hidden` keeps
-        // it invisible, and as a background it can't affect the real layout.
-        .background(alignment: .topLeading) {
-            exposureBar(compact: true)
-                .fixedSize()
-                .background(WidthReporter { compactBarWidth = $0 })
-                .hidden()
-                .allowsHitTesting(false)
-        }
-        .background(
-            WindowMinContentSize(
-                width: compactBarWidth,
-                height: Self.minPaneHeight + chromeHeightEstimate
-            )
-        )
     }
 
     /// Toolbar + footer + dividers. Only used for the window's minimum height,
     /// so a close estimate is enough — the layout itself measures for real.
-    private var chromeHeightEstimate: CGFloat { 130 }
+    private var chromeHeightEstimate: CGFloat { 170 }   // two toolbar rows at the narrowest
 
     /// One layout variant of the toolbar. Padding lives inside so ViewThatFits
     /// measures the real footprint, not the bare content.
-    private func exposureBar(compact: Bool) -> some View {
-        ExposureBar(compact: compact)
+    private func exposureBar(compact: Bool, stacked: Bool = false) -> some View {
+        ExposureBar(compact: compact, stacked: stacked)
             .padding(.leading, 16)
             .padding(.trailing, 24)   // last button isn't flush to the window edge
             .padding(.vertical, 10)

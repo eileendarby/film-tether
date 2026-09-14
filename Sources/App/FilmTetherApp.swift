@@ -80,6 +80,12 @@ struct FilmTetherApp: App {
             // menu is otherwise empty, and an empty menu on macOS opens and
             // instantly closes again, which is what made it look broken.
             CommandGroup(replacing: .toolbar) {
+                Button(model.showArchiveTray ? "Hide Archive Tray" : "Show Archive Tray") {
+                    model.showArchiveTray.toggle()
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+                .help("The right-hand column: which show and strip captures are filed to, and the upload queue. Cmd-Shift-T.")
+                Divider()
                 Button(model.showMeteringOverlay ? "Hide Zoom-Area Overlay" : "Show Zoom-Area Overlay") {
                     model.showMeteringOverlay.toggle()
                 }

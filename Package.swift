@@ -9,6 +9,7 @@ let package = Package(
         .library(name: "Camera", targets: ["Camera"]),
         .library(name: "Hotkey", targets: ["Hotkey"]),
         .library(name: "Scan", targets: ["Scan"]),
+        .library(name: "Archive", targets: ["Archive"]),
     ],
     targets: [
         .systemLibrary(
@@ -54,9 +55,17 @@ let package = Package(
             dependencies: [],
             path: "Sources/Scan"
         ),
+        // The archive's REST API: client, auth, upload engine and the models
+        // of what it returns. Foundation and CryptoKit only, so the whole
+        // thing is exercised by unit tests against a stubbed URL session.
+        .target(
+            name: "Archive",
+            dependencies: [],
+            path: "Sources/Archive"
+        ),
         .executableTarget(
             name: "App",
-            dependencies: ["Camera", "Hotkey", "Scan"],
+            dependencies: ["Camera", "Hotkey", "Scan", "Archive"],
             path: "Sources/App",
             swiftSettings: [
                 .unsafeFlags(["-parse-as-library"]),
@@ -84,6 +93,11 @@ let package = Package(
             name: "ScanTests",
             dependencies: ["Scan"],
             path: "Tests/ScanTests"
+        ),
+        .testTarget(
+            name: "ArchiveTests",
+            dependencies: ["Archive"],
+            path: "Tests/ArchiveTests"
         ),
     ]
 )

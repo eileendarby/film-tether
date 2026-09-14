@@ -79,6 +79,11 @@ final class AppModel: ObservableObject {
     @Published private(set) var lastCapture: String? = nil
     /// Where the last capture landed, so the footer can reveal it in Finder.
     @Published private(set) var lastCaptureURL: URL? = nil
+    /// The archive connection, show and strip. See ArchiveModel.
+    let archive = ArchiveModel()
+    @Published var showArchiveTray: Bool = AppSettings.shared.showArchiveTray {
+        didSet { AppSettings.shared.showArchiveTray = showArchiveTray }
+    }
     @Published private(set) var capturedFiles: [URL] = []
     /// The `{seq}` the next capture will be named with. Mirrors CameraCapture's
     /// session counter, which lives on the camera actor and starts over whenever
@@ -1281,6 +1286,8 @@ final class AppModel: ObservableObject {
         if let result = captureResult {
             self.lastCapture = result.path.lastPathComponent
             self.lastCaptureURL = result.path
+            // If a strip is hot, this frame belongs to its current number.
+            archive.captureCompleted(files: result.allPaths, primary: result.path)
             self.nextCaptureSequence = result.sequence + 1
             self.capturedFiles.append(contentsOf: result.allPaths)
             // Dimensions only — read from the file's metadata without decoding

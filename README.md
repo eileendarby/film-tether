@@ -23,6 +23,7 @@ The handful of things that actually matter for the way I use it.
 - **Focus check.** Hold Shift to punch in using the camera's sensor and confirm your focus is sharp.
 - **Focus control.** Keyboard shortcuts for stepping focus, when the conditions are right (lens set to AF, live view on).
 - **Focus peaking.** An adjustable overlay that attempts to highlight what's in focus (far from perfect).
+- **Archive tray.** A column on the right that files scans straight into the Eileen Darby Images archive over its REST API: sign in once per device, pick or create the show, register the strip of negatives in hand, and every capture is uploaded to the next number — named, filed and catalogued by the server, with a queue showing each send's progress. Close it (Cmd-Shift-T) if you're only scanning to disk.
 
 ## Honest caveats
 
@@ -32,7 +33,7 @@ I'd rather be upfront than oversell it.
 - I've only tested it on my 7D and a friend's 70D. I don't know how many other EOS bodies it works with.
 - Other cameras, or other brands, might be straightforward to add, since it's built on the open-source libgphoto2 project. You would still have to work through it with the camera in hand.
 
-It sticks to one job: tethered capture. It doesn't develop RAW, correct lenses, shoot video, do time-lapse, or sync anywhere.
+It sticks to one job: tethered capture. It doesn't develop RAW, correct lenses, shoot video, or do time-lapse. The one place it sends anything is the archive tray, and only when you sign in.
 
 ## Requirements
 

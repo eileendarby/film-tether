@@ -2,6 +2,94 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-09-14 — A toolbar that fits a laptop
+
+With the archive tray open the window could not be narrower than 1850 pt,
+wider than a 16″ MacBook Pro. Two changes to the toolbar:
+
+- The manual-focus stepper (six step buttons and the position counter, two
+  rows of small controls) folds into one **Focus** menu in the icons-only bar.
+  On a copy stand focus is set once and left, and the keys — `,` and `.`,
+  with Option for medium and Control for coarse steps — work regardless.
+- A third layout for windows too narrow even for the icons-only bar: the
+  pickers on one row, the buttons on a second. `ViewThatFits` picks it when
+  the single row would clip, and the window minimum is measured from it.
+
+Measured minimum content width with the tray open: 1850 → 1670 with the
+focus menu alone → **1057** with the stacked bar (696 for the bar itself).
+
+## 2026-09-14 — The archive tray: file scans straight into the database
+
+The right-hand side of the window is now a tray that talks to the Eileen Darby
+Images REST API (v1), so a strip of negatives is catalogued and uploaded as it
+is scanned — nothing renamed afterwards, nothing sent in a second pass. It
+fills the full height beside the preview and is put away with the toolbar
+button or View → Hide Archive Tray (Cmd-Shift-T).
+
+**Scan tab**, four sections in a fixed order, which is also the order of
+the work. Add Assets and Scanning replace each other in the fourth slot.
+
+- **Archive API.** A green dot when this device is connected. The API address, login, password and a device name. The server
+  emails a one-time code; that is typed once per device, never again. The
+  refresh token is kept in `~/Library/Application Support/Film Tether/` as a
+  0600 file (not the keychain: the app is ad-hoc signed, and every rebuild
+  would prompt). The password is never stored. A `401` refreshes the token and
+  retries once; a refused refresh signs the device out and says so.
+- **Active Show.** One field, "Search or Create a show": a show code in any
+  loose form is expanded (`T316` → `T00316`) and matched exactly; anything
+  else is searched across every field, notes included, so "Cole" finds every
+  show with Cole in its name or notes. Nothing found offers *Create Show*:
+  the typed text becomes the name (or the code, if it was one), a code is
+  typed, and *Finish* makes the show with an empty inventory and makes it
+  active.
+- **Show Inventory.** What the show holds, by type, roll and range — "No
+  assets in inventory" for a new show. Clicking a row makes it hot: captures
+  go to it from its first frame. (Everything in it is registered already, so
+  nothing is created.)
+- **Add Assets.** Type (from the server's type table), format (the film
+  sizes by their database ids), roll letter, first and last number. *Add
+  Assets* registers them and they appear in the inventory above — only
+  that; clicking the row is what starts scanning it. If some of a run is already
+  registered the existing assets are adopted and only the gaps are
+  registered, one by one. Asset ids are never composed here: every frame
+  gets the id the server hands back.
+- **Scanning.** Replaces Add Assets while a row is hot. The next frame,
+  large, with its asset id;
+  a bar down the left in the capture button's blue on a lighter tinted ground,
+  so the row every capture is going to is the one thing in the tray that
+  isn't grey. The inventory row it belongs to wears the same bar and tint;
+  *Skip* for a frame that isn't there; *Back* to redo one; a field to jump to
+  a frame; *Finish*, which is "done with this row for now" — the row stays
+  in the inventory and can be made hot again — and brings Add Assets back.
+  Every capture while a row is hot goes to the current frame and the position
+  advances, so the loop is move the film, press capture.
+
+Section headings are prominent, and every field and button has a tooltip.
+
+**Queue tab:** every send with its progress, state (waiting, reading, sending
+n/m blocks, sent, filed once the derivatives exist, failed with why), retry and
+remove. Sends go one at a time in order. A transfer is registered first with a
+SHA-256 per block and for the whole file, hashed in one pass; a damaged block
+is re-sent on its own; an interrupted transfer resumes from what the server
+says is outstanding. "Sent" is not "filed": derivatives are built by a cron
+job afterwards, so the queue polls `rendered` every 15 s while anything is
+sent-but-not-filed.
+
+The show, the hot row with its position, and the queue survive a relaunch. A
+new `Archive` library holds the client, models, parsing, hashing and upload
+engine — Foundation and CryptoKit only, with 40 tests against a stubbed URL
+session (refresh-on-401, the 409 already-registered path, resume, damaged
+blocks, the signed-out pause).
+
+Runs step by position, not number, so a suffix run (`12A-12C`) steps A → B → C
+exactly as `1-120` steps; the jump field takes a number, a padded number, a
+suffixed label, or a bare letter in a suffix run. A RAW+JPEG capture sends
+both: the RAW to the asset's `00` version and the JPEG to a `01` version,
+registered the first time that frame produces one (a redo reuses it).
+
+Not yet: crop geometry, white balance and rotation can't be sent — the API has
+no attribute writes.
+
 ## 2026-09-13 — Click the last capture to see it in Finder
 
 The "Last: IMG_….CR3" readout in the footer is now a link: clicking it opens a

@@ -37,6 +37,7 @@ final class AppSettings: ObservableObject {
         static let previewWhiteBalance = "previewWhiteBalance"
         static let expectedFilmSizeID = "expectedFilmSizeID"
         static let previewFineRotation = "previewFineRotation"
+        static let showArchiveTray = "showArchiveTray"
     }
 
     // MARK: - Defaults
@@ -258,6 +259,13 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(previewFineRotation, forKey: Key.previewFineRotation) }
     }
 
+    /// Whether the archive tray fills the right-hand side of the window. On
+    /// by default: it is the reason the app exists for the archive, and the
+    /// toolbar button puts it away for anyone scanning to disk only.
+    @Published var showArchiveTray: Bool {
+        didSet { defaults.set(showArchiveTray, forKey: Key.showArchiveTray) }
+    }
+
     /// Format the operator is currently working through.
     ///
     /// Stored as the catalogue's own numeric id, which is the website
@@ -353,6 +361,7 @@ final class AppSettings: ObservableObject {
             whiteBalance: storedWB
         )
         self.previewFineRotation = defaults.double(forKey: Key.previewFineRotation)
+        self.showArchiveTray = defaults.object(forKey: Key.showArchiveTray) as? Bool ?? true
         let storedSizeID = defaults.object(forKey: Key.expectedFilmSizeID) as? Int
         self.expectedFilmSize = storedSizeID.flatMap { id in
             FilmSize.seedCatalog.first { $0.id == id }

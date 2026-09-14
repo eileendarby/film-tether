@@ -13,8 +13,34 @@ struct ExposureBar: View {
     /// (the angle, the percentage) can't be shown by an icon at all.
     var compact: Bool = false
 
+    /// Two rows, for a window too narrow even for the icons-only bar: the
+    /// pickers on one line, the buttons on the next. This is the narrowest
+    /// layout, so it is also the one the window minimum is measured from.
+    var stacked: Bool = false
+
     var body: some View {
-        HStack(spacing: 10) {
+        if stacked {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 10) { pickers }
+                HStack(spacing: 10) {
+                    focusGroup()
+                    Divider().frame(height: 28)
+                    actions
+                }
+            }
+        } else {
+            HStack(spacing: 10) {
+                pickers
+                Divider().frame(height: 28)
+                focusGroup()
+                Divider().frame(height: 28)
+                actions
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var pickers: some View {
             menuPicker(
                 label: "ISO",
                 currentLabel: model.snapshot.isoLabel,
@@ -37,9 +63,10 @@ struct ExposureBar: View {
             whiteBalancePicker()
             kelvinStepper()
             imageFormatPicker()
-            Divider().frame(height: 28)
-            focusGroup()
-            Divider().frame(height: 28)
+    }
+
+    @ViewBuilder
+    private var actions: some View {
             captureButton()
             liveViewToggle()
             zoomToggleButton()
@@ -51,7 +78,23 @@ struct ExposureBar: View {
             cropToggleButton()
             peakingToggleButton()
             boxToggleButton()
+            archiveToggleButton()
+    }
+
+    /// Show or put away the archive tray on the right. Always enabled: the
+    /// tray is about the archive, not the camera, so it works without one.
+    @ViewBuilder
+    private func archiveToggleButton() -> some View {
+        Button {
+            model.showArchiveTray.toggle()
+        } label: {
+            adaptiveLabel(
+                model.showArchiveTray ? "Archive ON" : "Archive OFF",
+                systemImage: model.showArchiveTray ? "sidebar.trailing" : "sidebar.trailing",
+                width: 96
+            )
         }
+        .help("Show or hide the archive tray: where scans are filed and how the sends are going. Cmd-Shift-T.")
     }
 
     /// Label for a toggle that collapses to its icon in a narrow window.
@@ -406,7 +449,41 @@ struct ExposureBar: View {
     /// 7D every few minutes. Manual focus via the step buttons + lens-side
     /// AF + capture's own AF lifecycle still works.
     @ViewBuilder
+    /// Manual focus: six step buttons and a position counter when there's
+    /// room, one menu when there isn't. The two rows of small controls are
+    /// the widest thing in the bar after the pickers, and on a copy stand
+    /// focus is set once and left, so the compact bar folds them away. The
+    /// keys (, and . with Option/Control) work either way.
     private func focusGroup() -> some View {
+        if compact {
+            focusMenu()
+        } else {
+            focusStepper()
+        }
+    }
+
+    private func focusMenu() -> some View {
+        let position = model.focusStepPosition > 0 ? "+\(model.focusStepPosition)" : "\(model.focusStepPosition)"
+        return Menu {
+            Button("Far, coarse step  ⌃,") { Task { await model.driveManualFocus(.farLarge) } }
+            Button("Far, medium step  ⌥,") { Task { await model.driveManualFocus(.farSmall) } }
+            Button("Far, fine step  ,") { Task { await model.driveManualFocus(.farTiny) } }
+            Button("Near, fine step  .") { Task { await model.driveManualFocus(.nearTiny) } }
+            Button("Near, medium step  ⌥.") { Task { await model.driveManualFocus(.nearSmall) } }
+            Button("Near, coarse step  ⌃.") { Task { await model.driveManualFocus(.nearLarge) } }
+            Divider()
+            Button("Reset position counter (now \(position))") { model.resetFocusPosition() }
+        } label: {
+            Label("Focus", systemImage: "plusminus.circle")
+                .labelStyle(.iconOnly)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Manual focus steps (lens in AF, live view on). Position counter: \(position). Keys: , and . step fine; with Option medium; with Control coarse.")
+        .disabled(!model.isLiveViewOn)
+    }
+
+    private func focusStepper() -> some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 4) {
                 Text("Focus").font(.caption2).foregroundStyle(.secondary)
