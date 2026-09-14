@@ -2,6 +2,23 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-09-13 — Remove the one-tab tab bar
+
+The window opened with a tab bar across the top holding a single tab and a
+"+" button to add more — for an app that has one window and can only ever
+show one thing. It was also taking a strip of screen from the preview.
+
+Tabbing was already being switched off (`NSWindow.allowsAutomaticWindowTabbing
+= false`), but from `applicationDidFinishLaunching`, and by then SwiftUI had
+already built the window. Whether a window can tab is decided when it is
+created, and macOS remembers "show tab bar" per window in the app defaults, so
+the window came up with the bar on every launch whatever was set afterwards.
+That setting cleaned the View and Window menus, which is what it was measured
+against, and never reached the window itself.
+
+The switch now runs from `applicationWillFinishLaunching`, before the window
+exists. The menu tidying is unchanged.
+
 ## 2026-08-01 — Fix a 16-second hang on the first click of the app menu
 
 Clicking **Film Tether** in the menu bar froze the interface for about sixteen

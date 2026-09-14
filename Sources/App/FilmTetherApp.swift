@@ -194,6 +194,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// error (and a no-op via the optional unwrap below).
     static var activeModel: AppModel?
 
+    /// Window tabbing has to be switched off *before* SwiftUI builds the
+    /// window: whether a window can tab is decided when it is created, and
+    /// macOS remembers "show tab bar" per window in the app defaults, so a
+    /// window created with tabbing still allowed comes up with a one-tab tab
+    /// bar and a "+" button on every launch, whatever is set afterwards.
+    /// `applicationDidFinishLaunching` is already too late for that; this is
+    /// the last hook that runs first. See MenuBarTidy for why it must be off
+    /// at the source rather than tidied out of the menus.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSWindow.allowsAutomaticWindowTabbing = false
+    }
+
     /// Reports the window minimum the layout actually ended up enforcing.
     /// The toolbar's minimum width is derived from its compact layout rather
     /// than hardcoded, so this is the only way to see the real number — and it

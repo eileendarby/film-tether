@@ -38,14 +38,16 @@ enum MenuBarTidy {
     static func install() {
         // Film Tether is a single-window app: there is one live view, tied to
         // one camera over one USB connection, so a second tab could only ever
-        // show the same thing. This has to be switched off at the source rather
-        // than filtered out below, because AppKit inserts "Hide Tab Bar" and
-        // "Show All Tabs" while the menu is being displayed — after every hook
-        // this class can install. Measured: with tabbing on, they appear in View
-        // no matter what the tidy does; with it off, they never appear at all.
-        // It also keeps "Merge All Windows" and the rest out of the Window menu,
-        // which otherwise grows from 4 items to 16.
-        NSWindow.allowsAutomaticWindowTabbing = false
+        // show the same thing. Tabbing is switched off at the source, in
+        // AppDelegate.applicationWillFinishLaunching, rather than filtered out
+        // below, for two reasons. AppKit inserts "Hide Tab Bar" and "Show All
+        // Tabs" while the menu is being displayed — after every hook this class
+        // can install. Measured: with tabbing on, they appear in View no matter
+        // what the tidy does; with it off, they never appear at all. It also
+        // keeps "Merge All Windows" and the rest out of the Window menu, which
+        // otherwise grows from 4 items to 16. And it has to happen before the
+        // window is created, which is earlier than this method runs: set here,
+        // the menus came out clean but the window still wore a one-tab tab bar.
 
         NotificationCenter.default.addObserver(
             forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main
