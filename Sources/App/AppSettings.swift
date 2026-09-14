@@ -38,6 +38,7 @@ final class AppSettings: ObservableObject {
         static let expectedFilmSizeID = "expectedFilmSizeID"
         static let previewFineRotation = "previewFineRotation"
         static let showArchiveTray = "showArchiveTray"
+        static let archiveTrayWidth = "archiveTrayWidth"
     }
 
     // MARK: - Defaults
@@ -266,6 +267,11 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(showArchiveTray, forKey: Key.showArchiveTray) }
     }
 
+    /// Where the split between the camera and the tray was left.
+    @Published var archiveTrayWidth: Double {
+        didSet { defaults.set(archiveTrayWidth, forKey: Key.archiveTrayWidth) }
+    }
+
     /// Format the operator is currently working through.
     ///
     /// Stored as the catalogue's own numeric id, which is the website
@@ -362,6 +368,7 @@ final class AppSettings: ObservableObject {
         )
         self.previewFineRotation = defaults.double(forKey: Key.previewFineRotation)
         self.showArchiveTray = defaults.object(forKey: Key.showArchiveTray) as? Bool ?? true
+        self.archiveTrayWidth = defaults.object(forKey: Key.archiveTrayWidth) as? Double ?? 400
         let storedSizeID = defaults.object(forKey: Key.expectedFilmSizeID) as? Int
         self.expectedFilmSize = storedSizeID.flatMap { id in
             FilmSize.seedCatalog.first { $0.id == id }

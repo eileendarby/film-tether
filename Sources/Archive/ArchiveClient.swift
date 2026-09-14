@@ -207,6 +207,12 @@ public actor ArchiveClient {
         ))
     }
 
+    /// Delete one version of an asset. **Needs access level 61**; a scanning
+    /// station gets a 403, which the caller should expect and explain.
+    public func deleteAssetVersion(show: String, asset: String, version: String) async throws {
+        let _: Empty = try await send("DELETE", "shows/\(show)/assets/\(asset)/versions/\(version)")
+    }
+
     // MARK: - Uploads
 
     private struct CreateUploadRequest: Encodable {
@@ -240,6 +246,36 @@ public actor ArchiveClient {
 
     public func abandonUpload(id: Int) async throws {
         let _: Empty = try await send("DELETE", "uploads/\(id)")
+    }
+
+    // MARK: - Images
+
+    /// A derivative's bytes — `thumbnail`, `gallery`, `subscriber` or
+    /// `original`. The asset is named by its middle part (`NA0012`), the
+    /// show being in the path. "Not made yet" is a 404 whose message says so,
+    /// distinct from an asset that doesn't exist.
+    public func image(show: String, asset: String, kind: String) async throws -> Data {
+        try await download("shows/\(show)/assets/\(asset)/images/\(kind)")
+    }
+
+    /// GET raw bytes with the same token handling as `send`.
+    private func download(_ path: String, retryOn401: Bool = true) async throws -> Data {
+        var request = try makeRequest("GET", path, query: [])
+        request.setValue("*/*", forHTTPHeaderField: "Accept")
+        if accessToken == nil { try await refresh() }
+        guard let token = accessToken else { throw ArchiveError.unauthenticated }
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await perform(request)
+        if response.statusCode == 401, retryOn401 {
+            try await refresh()
+            return try await download(path, retryOn401: false)
+        }
+        guard (200..<300).contains(response.statusCode) else {
+            let message = (try? decoder.decode(ErrorBody.self, from: data))?.error
+                ?? HTTPURLResponse.localizedString(forStatusCode: response.statusCode)
+            throw ArchiveError.http(status: response.statusCode, message: message)
+        }
+        return data
     }
 
     // MARK: - Transport

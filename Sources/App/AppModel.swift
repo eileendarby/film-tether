@@ -1882,6 +1882,9 @@ final class AppModel: ObservableObject {
                 return nil // consume
             }
             if event.keyCode == AppSettings.shared.captureKeyCode {
+                // Typing takes precedence: Space in the show search is a
+                // space, not a shutter press. Same rule as the focus keys.
+                if (NSApp.keyWindow?.firstResponder as? NSText) != nil { return event }
                 hotkeyLog.info("capture key matched, firing captureNow")
                 Task { await self.captureNow() }
                 return nil // consume

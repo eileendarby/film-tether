@@ -73,6 +73,20 @@ final class ModelDecodingTests: XCTestCase {
         XCTAssertEqual(a.version, "00", "the string, not the number 0")
         XCTAssertEqual(a.format, 2)
         XCTAssertEqual(a.canonical, true)
+        XCTAssertFalse(a.hasScan, "registered, nothing filed yet")
+    }
+
+    func testAssetWithScan() throws {
+        let json = #"{ "assetid": "x", "number": "0001", "image": { "width": 8192, "height": 5464, "bitdepth": 16, "colordepth": 3, "filesize": 45000000, "extension": "cr3" } }"#
+        let a = try decoder.decode(ArchiveAsset.self, from: Data(json.utf8))
+        XCTAssertTrue(a.hasScan)
+        XCTAssertEqual(a.image?.extension, "cr3")
+    }
+
+    func testPathName() {
+        XCTAssertEqual(ArchiveAsset.pathName(ofAssetID: "T00316_NA0012_00"), "NA0012")
+        XCTAssertEqual(ArchiveAsset.pathName(ofAssetID: "T00316_NA0012A_01"), "NA0012A")
+        XCTAssertNil(ArchiveAsset.pathName(ofAssetID: "NA0012"))
     }
 
     func testAssetSuffixNumber() throws {

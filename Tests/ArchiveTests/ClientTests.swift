@@ -153,6 +153,32 @@ final class ClientTests: XCTestCase {
         XCTAssertEqual(page.total, 0)
     }
 
+    func testImageBytesAndNotMadeYet() async throws {
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 1, 2, 3])
+        MockURLProtocol.handler = { req, _ in
+            switch Mock.path(req) {
+            case "/auth/refresh":
+                return (200, Mock.json(#"{ "access_token": "A", "expires_in": 900 }"#))
+            case "/shows/T00316/assets/NA0001/images/thumbnail":
+                XCTAssertEqual(req.value(forHTTPHeaderField: "Authorization"), "Bearer A")
+                return (200, png)
+            case "/shows/T00316/assets/NA0002/images/thumbnail":
+                return (404, Mock.json(#"{ "error": "The thumbnail of T00316_NA0002_00 has not been made yet" }"#))
+            default:
+                return (404, Mock.json(#"{ "error": "nope" }"#))
+            }
+        }
+        let client = Mock.client()
+        let bytes = try await client.image(show: "T00316", asset: "NA0001", kind: "thumbnail")
+        XCTAssertEqual(bytes, png, "bytes come back untouched, not decoded as JSON")
+        do {
+            _ = try await client.image(show: "T00316", asset: "NA0002", kind: "thumbnail")
+            XCTFail()
+        } catch let e as ArchiveError {
+            XCTAssertEqual(e, .http(status: 404, message: "The thumbnail of T00316_NA0002_00 has not been made yet"))
+        }
+    }
+
     func testAllAssetsFollowsPages() async throws {
         MockURLProtocol.handler = { req, _ in
             if Mock.path(req) == "/auth/refresh" {

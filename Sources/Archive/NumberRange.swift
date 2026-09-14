@@ -71,6 +71,21 @@ public struct NumberRange: Equatable, Hashable, Codable, Sendable {
         count == 1 ? firstLabel : "\(firstLabel)-\(lastLabel)"
     }
 
+    /// Positions rendered as runs in this notation: [0, 1, 2, 6] in `1-20` is
+    /// "1-3, 7". Empty for none.
+    public func summary(ofPositions positions: [Int]) -> String {
+        let sorted = Array(Set(positions.filter { $0 >= 0 && $0 < count })).sorted()
+        var parts: [String] = []
+        var i = 0
+        while i < sorted.count {
+            var j = i
+            while j + 1 < sorted.count, sorted[j + 1] == sorted[j] + 1 { j += 1 }
+            parts.append(i == j ? label(at: sorted[i]) : "\(label(at: sorted[i]))-\(label(at: sorted[j]))")
+            i = j + 1
+        }
+        return parts.joined(separator: ", ")
+    }
+
     /// The position of a label the operator typed, or nil if it isn't in
     /// the run. Accepts padded or not (`"34"`, `"0034"`, `"0012a"`), and for
     /// a suffix run a bare letter (`"B"`).

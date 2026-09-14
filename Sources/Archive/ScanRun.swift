@@ -32,6 +32,10 @@ public struct ScanRun: Codable, Equatable, Sendable {
     public var secondaryAssetIDs: [String: String]
     public var scanned: [String]
     public var skipped: [String]
+    /// Frames taken out of the row: the negative doesn't exist, the count
+    /// was off. Stepping passes over them. Optional only so a row saved
+    /// before this existed still decodes.
+    public var removed: [String]?
     public var started: Date
 
     public init(show: String, showName: String? = nil, type: String, typeName: String? = nil,
@@ -50,7 +54,26 @@ public struct ScanRun: Codable, Equatable, Sendable {
         self.secondaryAssetIDs = [:]
         self.scanned = []
         self.skipped = []
+        self.removed = []
         self.started = started
+    }
+
+    public var removedLabels: [String] { removed ?? [] }
+
+    public func isRemoved(_ label: String) -> Bool {
+        removedLabels.contains(NumberRange.normalize(label))
+    }
+
+    /// Move `position` forward past any removed frames.
+    private mutating func settle() {
+        while position < range.count, isRemoved(range.label(at: position)) { position += 1 }
+    }
+
+    /// Take the current frame out of the row and move on.
+    public mutating func removeCurrent() {
+        guard let label = currentLabel else { return }
+        removed = removedLabels + [NumberRange.normalize(label)]
+        settle()
     }
 
     /// Every frame has been scanned or skipped.
@@ -80,6 +103,7 @@ public struct ScanRun: Codable, Equatable, Sendable {
         guard let label = currentLabel else { return }
         scanned.append(label)
         position += 1
+        settle()
     }
 
     /// Move on without a capture — the frame isn't there.
@@ -87,6 +111,7 @@ public struct ScanRun: Codable, Equatable, Sendable {
         guard let label = currentLabel else { return }
         skipped.append(label)
         position += 1
+        settle()
     }
 
     /// Jump to a position. Out-of-range values are ignored, so a typo can't
@@ -95,6 +120,7 @@ public struct ScanRun: Codable, Equatable, Sendable {
     public mutating func jump(to i: Int) {
         guard i >= 0, i <= range.count else { return }
         position = i
+        settle()
     }
 
     /// Jump to a typed label ("34", "0034", "12B", or "B" in a suffix run).
@@ -103,12 +129,16 @@ public struct ScanRun: Codable, Equatable, Sendable {
     public mutating func jump(toLabel text: String) -> Bool {
         guard let i = range.index(of: text) else { return false }
         position = i
+        settle()
         return true
     }
 
     /// Step back one, to redo the previous frame.
     public mutating func back() {
-        jump(to: position - 1)
+        var i = position - 1
+        while i >= 0, isRemoved(range.label(at: i)) { i -= 1 }
+        guard i >= 0 else { return }
+        position = i
     }
 
     /// "T00316 · Negative · roll A · 120mm Rollei · 1-120"
@@ -121,6 +151,7 @@ public struct ScanRun: Codable, Equatable, Sendable {
     }
 
     public var remaining: Int {
-        max(0, range.count - position)
+        guard position < range.count else { return 0 }
+        return (position..<range.count).filter { !isRemoved(range.label(at: $0)) }.count
     }
 }

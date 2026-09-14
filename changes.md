@@ -2,6 +2,13 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-09-14 — Space in a text field is a space
+
+The capture hotkey (Space by default) was taken by the app-wide key monitor
+before any text field saw it, so "New York" could not be typed into the show
+search. The monitor now leaves the key alone while a text field is being
+edited, as it already did for the focus-stepping keys.
+
 ## 2026-09-14 — A toolbar that fits a laptop
 
 With the archive tray open the window could not be narrower than 1850 pt,
@@ -24,7 +31,9 @@ The right-hand side of the window is now a tray that talks to the Eileen Darby
 Images REST API (v1), so a strip of negatives is catalogued and uploaded as it
 is scanned — nothing renamed afterwards, nothing sent in a second pass. It
 fills the full height beside the preview and is put away with the toolbar
-button or View → Hide Archive Tray (Cmd-Shift-T).
+button or View → Hide Archive Tray (Cmd-Shift-T). The split between it and
+the camera can be dragged (300–720 pt, 400 by default) and the width is
+remembered.
 
 **Scan tab**, four sections in a fixed order, which is also the order of
 the work. Add Assets and Scanning replace each other in the fourth slot.
@@ -38,23 +47,36 @@ the work. Add Assets and Scanning replace each other in the fourth slot.
 - **Active Show.** One field, "Search or Create a show": a show code in any
   loose form is expanded (`T316` → `T00316`) and matched exactly; anything
   else is searched across every field, notes included, so "Cole" finds every
-  show with Cole in its name or notes. Nothing found offers *Create Show*:
+  show with Cole in its name or notes, sorted by show code. Nothing found offers *Create Show*, and a result
+  list ends with an *Add New…* link for the same purpose, since shows share
+  names ("Kiss Me, Kate" exists several times under different codes). Either way:
   the typed text becomes the name (or the code, if it was one), a code is
   typed, and *Finish* makes the show with an empty inventory and makes it
   active.
+  The chosen show's name and code are set half again as large as the rest
+  of the panel. Its notes are shown with each [bracketed] phrase — the
+  archive's cross-reference notation — as a link that searches for it. *Change* is always available: it finishes any row being scanned and
+  brings the search back with the cursor in it.
 - **Show Inventory.** What the show holds, by type, roll and range — "No
-  assets in inventory" for a new show. Clicking a row makes it hot: captures
+  assets in inventory" for a new show. The numbers are coloured by what the
+  archive has: green when every frame has a scan filed, red when none has,
+  yellow in between (read from each asset's `image` block, refreshed when a
+  send completes); the tooltip gives the count. Clicking a row makes it hot: captures
   go to it from its first frame. (Everything in it is registered already, so
   nothing is created.)
 - **Add Assets.** Type (from the server's type table), format (the film
-  sizes by their database ids), roll letter, first and last number. *Add
+  sizes by their database ids, 120mm Rollei by default), roll letter, first and last number. *Add
   Assets* registers them and they appear in the inventory above — only
   that; clicking the row is what starts scanning it. If some of a run is already
   registered the existing assets are adopted and only the gaps are
   registered, one by one. Asset ids are never composed here: every frame
   gets the id the server hands back.
-- **Scanning.** Replaces Add Assets while a row is hot. The next frame,
-  large, with its asset id;
+- **Scanning.** Replaces Add Assets while a row is hot. Under the row's
+  summary, what the archive already holds for it ("In archive: 1-4, 7 (5 of
+  20)"), and *Next* starts at the first frame the archive lacks. The next
+  frame, large, with its asset id; *Remove* for a negative that doesn't
+  exist (the strip was miscounted): the asset leaves the row, and the
+  archive too where the station may delete — a 403 is explained, not hidden;
   a bar down the left in the capture button's blue on a lighter tinted ground,
   so the row every capture is going to is the one thing in the tray that
   isn't grey. The inventory row it belongs to wears the same bar and tint;
@@ -63,6 +85,16 @@ the work. Add Assets and Scanning replace each other in the fourth slot.
   in the inventory and can be made hot again — and brings Add Assets back.
   Every capture while a row is hot goes to the current frame and the position
   advances, so the loop is move the film, press capture.
+- **Scanned.** Under Scanning, first the scanned inventory — "1-20, 26-35,
+  55" — each block a link that jumps the list to its first frame; then the
+  row's scanned frames in row order, each the width of the panel, captioned
+  with its number while the picture is a local rendering and with the
+  archive's filename once the archive's own derivative has taken over. Lazy: a picture is
+  fetched when its cell scrolls into view, so a 500-frame row costs nothing
+  until it's looked at. Made on this machine
+  from the local file (QuickLook, so CR3 and JPEG alike) until the archive
+  has rendered its own thumbnail, which then takes over — a row made hot
+  later shows the archive's pictures for what it already holds.
 
 Section headings are prominent, and every field and button has a tooltip.
 

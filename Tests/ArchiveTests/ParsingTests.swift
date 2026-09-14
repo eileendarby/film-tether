@@ -81,6 +81,28 @@ final class NumberRangeTests: XCTestCase {
         XCTAssertNil(suffixes.index(of: "13B"))
     }
 
+    func testSummaryOfPositions() {
+        let r = NumberRange(first: 1, last: 20)!
+        XCTAssertEqual(r.summary(ofPositions: [0, 1, 2, 6, 11, 12]), "1-3, 7, 12-13")
+        XCTAssertEqual(r.summary(ofPositions: [12, 11, 0, 0]), "1, 12-13", "order and repeats don't matter")
+        XCTAssertEqual(r.summary(ofPositions: []), "")
+        XCTAssertEqual(r.summary(ofPositions: [99]), "", "outside the range is ignored")
+        let s = NumberRange(number: 12, firstSuffix: "A", lastSuffix: "D")!
+        XCTAssertEqual(s.summary(ofPositions: [0, 2, 3]), "12A, 12C-12D")
+    }
+
+    func testNoteLinks() {
+        XCTAssertEqual(NoteLinks.segments("with [Cole Porter] at the [Alvin]"), [
+            .init(text: "with "), .init(text: "Cole Porter", term: "Cole Porter"),
+            .init(text: " at the "), .init(text: "Alvin", term: "Alvin"),
+        ])
+        XCTAssertEqual(NoteLinks.segments("plain"), [.init(text: "plain")])
+        XCTAssertEqual(NoteLinks.segments("[T317]"), [.init(text: "T317", term: "T317")])
+        XCTAssertEqual(NoteLinks.segments("odd [] one"), [.init(text: "odd []"), .init(text: " one")])
+        XCTAssertEqual(NoteLinks.segments("open [bracket"), [.init(text: "open [bracket")])
+        XCTAssertEqual(NoteLinks.segments(""), [])
+    }
+
     func testNormalizeAndPad() {
         XCTAssertEqual(NumberRange.normalize("0012A"), "12A")
         XCTAssertEqual(NumberRange.normalize("0001"), "1")
@@ -141,6 +163,34 @@ final class ScanRunTests: XCTestCase {
         r.markScanned()
         XCTAssertTrue(r.isFinished)
         XCTAssertEqual(r.summary, "T00316 · N · 12A-12C")
+    }
+
+    func testRemoveCurrent() {
+        var r = makeRun()
+        r.removeCurrent()
+        XCTAssertEqual(r.removedLabels, ["1"])
+        XCTAssertEqual(r.currentLabel, "2", "moves on to the next frame that exists")
+        XCTAssertEqual(r.remaining, 2)
+        r.markScanned()
+        r.removeCurrent()
+        XCTAssertTrue(r.isFinished, "removing the last frame finishes the row")
+        r.back()
+        XCTAssertEqual(r.currentLabel, "2", "back steps over removed frames")
+        r.jump(to: 0)
+        XCTAssertEqual(r.currentLabel, "2", "a jump onto a removed frame settles on the next one")
+        XCTAssertTrue(r.jump(toLabel: "3"))
+        XCTAssertTrue(r.isFinished, "a typed jump onto a removed frame settles past it too")
+        let data = try! JSONEncoder().encode(r)
+        XCTAssertEqual(try! JSONDecoder().decode(ScanRun.self, from: data).removedLabels, ["1", "3"])
+    }
+
+    func testRowSavedBeforeRemovalDecodes() throws {
+        var r = makeRun()
+        r.removed = nil
+        let data = try JSONEncoder().encode(r)
+        let back = try JSONDecoder().decode(ScanRun.self, from: data)
+        XCTAssertEqual(back.removedLabels, [])
+        XCTAssertEqual(back.remaining, 3)
     }
 
     func testJumpAndBack() {

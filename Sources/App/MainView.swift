@@ -9,18 +9,36 @@ struct MainView: View {
     /// right as buttons are added.
     @State private var compactBarWidth: CGFloat = 0
 
+    /// The tray's width, in points. Starts from the remembered value and is
+    /// written back as the handle is dragged. Owned here rather than read
+    /// off the tray's layout: a width that is *measured* and stored gets
+    /// clobbered by the first layout pass, which is why HSplitView with an
+    /// idealWidth never took a new default.
+    @State private var trayWidth: CGFloat = CGFloat(AppSettings.shared.archiveTrayWidth)
+
     /// Room for the live-view pane itself, on top of the chrome. Focus checking
     /// needs a reasonably large image to be worth anything.
     private static let minPaneHeight: CGFloat = 420
 
     var body: some View {
-        HStack(spacing: 0) {
-            cameraColumn
-            if model.showArchiveTray {
-                Divider()
-                ArchiveTray(archive: model.archive)
+        // A split the operator can drag: the camera column takes what the
+        // tray leaves. The tray is never wider than the window can afford
+        // beside the toolbar, whatever width was remembered.
+        GeometryReader { geo in
+            let affordable = max(ArchiveTray.minWidth, geo.size.width - compactBarWidth - SplitHandle.thickness)
+            let width = min(trayWidth, affordable)
+            HStack(spacing: 0) {
+                cameraColumn
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if model.showArchiveTray {
+                    SplitHandle(width: $trayWidth, minWidth: ArchiveTray.minWidth,
+                                maxWidth: min(ArchiveTray.maxWidth, affordable))
+                    ArchiveTray(archive: model.archive)
+                        .frame(width: width)
+                }
             }
         }
+        .onChange(of: trayWidth) { _, w in AppSettings.shared.archiveTrayWidth = Double(w) }
         .background(Color(NSColor.windowBackgroundColor))
         // Offscreen copy of the icons-only bar, purely to learn its natural
         // width. `.fixedSize` makes it report what it actually wants rather
@@ -37,7 +55,7 @@ struct MainView: View {
             WindowMinContentSize(
                 // The tray is a fixed-width column beside the camera, so when
                 // it is open the floor is the toolbar plus the tray.
-                width: compactBarWidth + (model.showArchiveTray ? ArchiveTray.width + 1 : 0),
+                width: compactBarWidth + (model.showArchiveTray ? ArchiveTray.minWidth + SplitHandle.thickness : 0),
                 height: Self.minPaneHeight + chromeHeightEstimate
             )
         )

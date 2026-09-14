@@ -142,14 +142,37 @@ public struct ArchiveAsset: Codable, Equatable, Identifiable, Sendable {
     public var version: String?
     public var canonical: Bool?
     public var format: Int?
+    /// Filled in when a scan arrives, not when the asset is registered.
+    public var image: AssetImage?
 
     public var id: String { assetid }
+
+    /// A scan has been filed for this asset.
+    public var hasScan: Bool {
+        (image?.filesize ?? 0) > 0 || image?.extension != nil
+    }
+
+    /// The middle part of an assetid, which is how a path names an asset:
+    /// `T00316_NA0012_00` → `NA0012`. Nil for anything not of that shape.
+    public static func pathName(ofAssetID id: String) -> String? {
+        let parts = id.split(separator: "_")
+        return parts.count == 3 ? String(parts[1]) : nil
+    }
 
     /// The numeric part of `number`, ignoring a suffix letter: "0012A" → 12.
     public var numberValue: Int? {
         let digits = number.prefix { $0.isNumber }
         return Int(digits)
     }
+}
+
+public struct AssetImage: Codable, Equatable, Sendable {
+    public var width: Int?
+    public var height: Int?
+    public var bitdepth: Int?
+    public var colordepth: Int?
+    public var filesize: Int?
+    public var `extension`: String?
 }
 
 public struct AssetPage: Codable, Equatable, Sendable {

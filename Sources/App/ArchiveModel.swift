@@ -1,4 +1,5 @@
 import SwiftUI
+import QuickLookThumbnailing
 import Archive
 import Scan
 import os
@@ -58,6 +59,9 @@ final class ArchiveModel: ObservableObject {
     @Published private(set) var searchDone = false
     @Published private(set) var currentShow: ArchiveShow?
     @Published private(set) var isCreatingShow = false
+    /// Set by Change so the search field takes the cursor when it appears.
+    /// Not at launch: focusing it then would swallow the capture hotkey.
+    @Published var wantsSearchFocus = false
     @Published var createCode = ""
     @Published var createName = ""
 
@@ -65,6 +69,16 @@ final class ArchiveModel: ObservableObject {
 
     @Published private(set) var inventory: ArchiveInventory?
     @Published private(set) var isLoadingInventory = false
+    /// Which frames of each type have a scan filed, keyed by type letter and
+    /// then "roll|label". Read from the assets' image block, which the
+    /// archive fills in when a scan arrives.
+    @Published private(set) var scannedFrames: [String: Set<String>] = [:]
+    private var scanStatusTask: Task<Void, Never>?
+    private var lastDoneCount = 0
+    /// Pictures of the hot row's frames, by the RAW's assetid.
+    @Published private(set) var thumbnails: [String: Thumbnail] = [:]
+    private var thumbnailWork: Set<String> = []
+    private var archiveTried: [String: Date] = [:]
     @Published var formType = "N"
     @Published var formFormatID: Int
     @Published var formRoll = ""
@@ -109,7 +123,9 @@ final class ArchiveModel: ObservableObject {
         baseURLText = defaults.string(forKey: Key.baseURL) ?? ""
         login = defaults.string(forKey: Key.login) ?? ""
         device = defaults.string(forKey: Key.device) ?? (Host.current().localizedName ?? "Film Tether")
-        formFormatID = AppSettings.shared.expectedFilmSize?.id ?? 2
+        // 120mm Rollei, the archive's id 2: most of what gets scanned. Not the
+        // auto-crop's expected size, which follows whatever is under the lens.
+        formFormatID = 2
         restoreState()
         if let creds = tokenStore.load(), let url = try? ArchiveClient.parseBaseURL(creds.baseURL) {
             baseURLText = creds.baseURL
@@ -231,7 +247,9 @@ final class ArchiveModel: ObservableObject {
         do {
             let page = try await client.searchShows(query: Self.searchTerm(for: q), perpage: 25)
             guard !Task.isCancelled else { return }
-            showResults = page.shows
+            // By show code, whatever order the server chose: T00316 before
+            // T00317, and the categories together.
+            showResults = page.shows.sorted { $0.id < $1.id }
             searchDone = true
         } catch {
             report(error)
@@ -255,9 +273,23 @@ final class ArchiveModel: ObservableObject {
         await loadInventory()
     }
 
+    /// Back to the search. A row being scanned is finished first — the same
+    /// "done for now" as the Finish button, so nothing is lost and the row
+    /// can be made hot again from the inventory later.
+    /// A bracketed phrase in a note was clicked: back to the search, with
+    /// that phrase as the query. Finishes any row being scanned, as Change
+    /// does.
+    func searchFromNote(_ term: String) {
+        clearShow()
+        showQuery = term
+    }
+
     func clearShow() {
+        run = nil
         currentShow = nil
         inventory = nil
+        isCreatingShow = false
+        wantsSearchFocus = true
         persistState()
     }
 
@@ -322,6 +354,45 @@ final class ArchiveModel: ObservableObject {
         } catch {
             report(error)
         }
+        await loadScanStatus()
+    }
+
+    private func loadScanStatus() async {
+        guard let client, let show = currentShow, let inv = inventory else { return }
+        var result: [String: Set<String>] = [:]
+        for type in inv.types where !type.ranges.isEmpty {
+            guard let assets = try? await client.allAssets(show: show.id, type: type.type) else { continue }
+            result[type.type] = Set(assets.filter(\.hasScan).map { Self.frameKey(roll: $0.roll, label: $0.number) })
+        }
+        scannedFrames = result
+    }
+
+    private static func frameKey(roll: String?, label: String) -> String {
+        "\((roll ?? "").uppercased())|\(NumberRange.normalize(label))"
+    }
+
+    /// Positions in the run whose frames have a scan filed in the archive.
+    func archivedPositions(of run: ScanRun) -> [Int] {
+        let filed = scannedFrames[run.type] ?? []
+        return (0..<run.range.count).filter {
+            filed.contains(Self.frameKey(roll: run.roll, label: run.range.label(at: $0)))
+        }
+    }
+
+    /// "In archive: 1-4, 7 (5 of 20)", for the Scanning panel.
+    func archivedSummary(of run: ScanRun) -> String {
+        let p = archivedPositions(of: run)
+        if p.isEmpty { return "In archive: none yet" }
+        return "In archive: \(run.range.summary(ofPositions: p)) (\(p.count) of \(run.range.count))"
+    }
+
+    /// How much of an inventory row is in the archive: frames with a scan
+    /// filed, out of the row's frames. Nil for a row that can't be stepped.
+    func coverage(of type: InventoryType, _ range: InventoryRange) -> (scanned: Int, total: Int)? {
+        guard let r = NumberRange.parse(range.range) else { return nil }
+        let filed = scannedFrames[type.type] ?? []
+        let n = (0..<r.count).filter { filed.contains(Self.frameKey(roll: range.roll, label: r.label(at: $0))) }.count
+        return (n, r.count)
     }
 
     /// The row's parameters, as the add-assets form would hold them.
@@ -348,8 +419,13 @@ final class ArchiveModel: ObservableObject {
         }
         await busy {
             let ids = try await resolveAssets(p)
+            await loadScanStatus()   // so Next lands on the first frame the archive lacks
             makeHot(p, assetIDs: ids)
-            flash("Scanning \(range.range) from \(NumberRange.pad(p.range.firstLabel))")
+            if let next = run?.currentPadded {
+                flash("Scanning \(range.range) from \(next)")
+            } else {
+                flash("\(range.range) is all in the archive already")
+            }
         }
     }
 
@@ -426,9 +502,14 @@ final class ArchiveModel: ObservableObject {
         guard let show = currentShow else { return }
         let typeName = types.first { $0.type == p.type }?.displayName
         let formatName = formats.first { $0.id == p.format }?.name
-        run = ScanRun(show: show.id, showName: show.name, type: p.type, typeName: typeName,
-                      roll: p.roll.isEmpty ? nil : p.roll, format: p.format, formatName: formatName,
-                      range: p.range, assetIDs: assetIDs)
+        var r = ScanRun(show: show.id, showName: show.name, type: p.type, typeName: typeName,
+                        roll: p.roll.isEmpty ? nil : p.roll, format: p.format, formatName: formatName,
+                        range: p.range, assetIDs: assetIDs)
+        // Next is the first frame the archive doesn't have yet. If it has
+        // them all, the row starts finished; Back or the jump field reopen it.
+        let filed = Set(archivedPositions(of: r))
+        r.jump(to: (0..<r.range.count).first { !filed.contains($0) } ?? r.range.count)
+        run = r
         setNumberText = ""
         persistState()
     }
@@ -441,6 +522,35 @@ final class ArchiveModel: ObservableObject {
         run = r
         persistState()
         flash("Skipped \(label)")
+    }
+
+    /// The negative under the current number doesn't exist — the strip was
+    /// miscounted. Take it out of the row, and out of the archive where this
+    /// station is allowed to (deleting needs access level 61; a scanning
+    /// station usually isn't, and is told so).
+    func removeCurrent() async {
+        guard var r = run, let label = r.currentLabel, let padded = r.currentPadded, let assetID = r.currentAssetID else { return }
+        var kept: String? = nil
+        if let client, let name = ArchiveAsset.pathName(ofAssetID: assetID) {
+            var ids = [assetID]
+            if let jpeg = r.secondaryAssetIDs[label] { ids.append(jpeg) }
+            for id in ids {
+                let version = String(id.split(separator: "_").last ?? "00")
+                do {
+                    try await client.deleteAssetVersion(show: r.show, asset: name, version: version)
+                } catch ArchiveError.http(403, _) {
+                    kept = "the archive keeps it: deleting needs access level 61"
+                } catch {
+                    report(error)
+                    return
+                }
+            }
+        }
+        r.removeCurrent()
+        run = r
+        persistState()
+        flash(kept.map { "Removed \(padded) from this row; \($0)" } ?? "Removed \(padded) from the row and the archive")
+        await loadInventory()
     }
 
     func stepBack() {
@@ -544,8 +654,24 @@ final class ArchiveModel: ObservableObject {
     }
 
     private func jobsChanged(_ new: [UploadJob]) {
+        let newlyRendered = new.filter { j in
+            j.state == .rendered && !jobs.contains { $0.id == j.id && $0.state == .rendered }
+        }
         jobs = new
         persistState()
+        if !newlyRendered.isEmpty { upgradeThumbnails(for: newlyRendered) }
+        // A send finished: the inventory colours are out of date. Ask again,
+        // a moment later so a burst of completions costs one request.
+        let done = new.filter { $0.isDone }.count
+        if done != lastDoneCount {
+            lastDoneCount = done
+            scanStatusTask?.cancel()
+            scanStatusTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard !Task.isCancelled else { return }
+                await self?.loadScanStatus()
+            }
+        }
         if new.contains(where: { if case .failed(let why) = $0.state { return why.hasPrefix("Signed out") } else { return false } }),
            auth == .signedIn {
             auth = .signedOut
@@ -626,6 +752,126 @@ final class ArchiveModel: ObservableObject {
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             guard !Task.isCancelled else { return }
             self?.status = nil
+        }
+    }
+
+    // MARK: - Thumbnails
+
+    struct Thumbnail: Equatable {
+        enum Source: Equatable { case local, archive }
+        var image: NSImage
+        var source: Source
+    }
+
+    struct Frame: Identifiable {
+        var label: String
+        var assetID: String
+        /// Nil until requested and loaded.
+        var thumbnail: Thumbnail?
+        var id: String { assetID }
+    }
+
+    /// The hot row's frames that have a scan — in the archive, or captured
+    /// here — in row order, lowest number at the top. Pictures are loaded
+    /// as the list is scrolled, not for every frame up front: a 500-frame
+    /// row costs nothing until it's looked at.
+    func frames(of run: ScanRun) -> [Frame] {
+        let filed = scannedFrames[run.type] ?? []
+        return (0..<run.range.count).compactMap { i in
+            let label = run.range.label(at: i)
+            guard !run.isRemoved(label), let id = run.assetID(for: label) else { return nil }
+            let available = filed.contains(Self.frameKey(roll: run.roll, label: label))
+                || jobs.contains { $0.assetID == id && $0.isDone }
+                || localFile(for: id, label: label, show: run.show) != nil
+            guard available else { return nil }
+            return Frame(label: label, assetID: id, thumbnail: thumbnails[id])
+        }
+    }
+
+    struct ScannedBlock: Identifiable {
+        /// "1-20" or "55", in the row's notation.
+        var text: String
+        var firstAssetID: String
+        var id: String { firstAssetID }
+    }
+
+    /// The scanned frames as runs of consecutive numbers — "1-20, 26-35,
+    /// 55" — each knowing its first frame, so a click can jump the list there.
+    func scannedBlocks(of run: ScanRun) -> [ScannedBlock] {
+        let positions = frames(of: run).compactMap { run.range.index(of: $0.label) }.sorted()
+        var blocks: [ScannedBlock] = []
+        var i = 0
+        while i < positions.count {
+            var j = i
+            while j + 1 < positions.count, positions[j + 1] == positions[j] + 1 { j += 1 }
+            let text = run.range.summary(ofPositions: Array(positions[i...j]))
+            if let id = run.assetID(for: run.range.label(at: positions[i])) {
+                blocks.append(ScannedBlock(text: text, firstAssetID: id))
+            }
+            i = j + 1
+        }
+        return blocks
+    }
+
+    /// Called when a frame's cell comes into view. The archive's thumbnail
+    /// where the scan has been rendered, else one made here from the local
+    /// file. A frame the archive has but hasn't rendered yet gets its local
+    /// picture and is asked about again after a while.
+    func requestThumbnail(for frame: Frame, in run: ScanRun) {
+        let id = frame.assetID
+        let inArchive = (scannedFrames[run.type] ?? []).contains(Self.frameKey(roll: run.roll, label: frame.label))
+            || jobs.contains { $0.assetID == id && $0.state == .rendered }
+        let askedRecently = archiveTried[id].map { Date().timeIntervalSince($0) < 30 } ?? false
+        let wantArchive = inArchive && thumbnails[id]?.source != .archive && !askedRecently
+        let wantLocal = thumbnails[id] == nil
+        guard wantArchive || wantLocal, !thumbnailWork.contains(id) else { return }
+        thumbnailWork.insert(id)
+        let local = localFile(for: id, label: frame.label, show: run.show)
+        let show = run.show
+        Task { [weak self] in
+            await self?.loadThumbnail(assetID: id, show: show, tryArchive: wantArchive, localFile: local)
+        }
+    }
+
+    /// A send was just filed with derivatives: swap its local picture for
+    /// the archive's, if one is showing.
+    private func upgradeThumbnails(for rendered: [UploadJob]) {
+        guard let run else { return }
+        for job in rendered where thumbnails[job.assetID]?.source == .local {
+            if let frame = frames(of: run).first(where: { $0.assetID == job.assetID }) {
+                archiveTried[job.assetID] = nil
+                requestThumbnail(for: frame, in: run)
+            }
+        }
+    }
+
+    /// The file this session captured for a frame, if it's still on disk —
+    /// the JPEG when there is one, since it thumbnails faster than the RAW.
+    private func localFile(for assetID: String, label: String, show: String) -> URL? {
+        let middle = ArchiveAsset.pathName(ofAssetID: assetID)
+        let candidates = jobs
+            .filter { $0.show == show && $0.label == label && ArchiveAsset.pathName(ofAssetID: $0.assetID) == middle }
+            .map(\.fileURL)
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+        return candidates.first { ["jpg", "jpeg"].contains($0.pathExtension.lowercased()) } ?? candidates.first
+    }
+
+    private func loadThumbnail(assetID: String, show: String, tryArchive: Bool, localFile: URL?) async {
+        defer { thumbnailWork.remove(assetID) }
+        if tryArchive, let client, let name = ArchiveAsset.pathName(ofAssetID: assetID) {
+            archiveTried[assetID] = Date()
+            if let data = try? await client.image(show: show, asset: name, kind: "thumbnail"),
+               let image = NSImage(data: data) {
+                thumbnails[assetID] = Thumbnail(image: image, source: .archive)
+                return
+            }
+        }
+        guard thumbnails[assetID] == nil, let file = localFile else { return }
+        let request = QLThumbnailGenerator.Request(
+            fileAt: file, size: CGSize(width: 720, height: 720), scale: 2, representationTypes: .thumbnail
+        )
+        if let rep = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request) {
+            thumbnails[assetID] = Thumbnail(image: rep.nsImage, source: .local)
         }
     }
 }

@@ -13,8 +13,15 @@ import Scan
 /// those two replace each other, and never move above the inventory.
 struct ArchiveTray: View {
     @ObservedObject var archive: ArchiveModel
+    @FocusState private var searchFocused: Bool
 
-    static let width: CGFloat = 360
+    /// Narrow enough to keep a laptop usable with the tray open; the split
+    /// can be dragged wider up to `maxWidth`. MainView owns the width and
+    /// remembers it — the tray is told its width, never measured for it,
+    /// so the stored value can't be overwritten by whatever a layout pass
+    /// happened to produce.
+    static let minWidth: CGFloat = 300
+    static let maxWidth: CGFloat = 720
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,7 +39,6 @@ struct ArchiveTray: View {
             case .queue: queueTab
             }
         }
-        .frame(width: Self.width)
         .background(Color(NSColor.controlBackgroundColor))
     }
 
@@ -49,8 +55,9 @@ struct ArchiveTray: View {
     // MARK: - Scan tab
 
     private var scanTab: some View {
+        ScrollViewReader { proxy in
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 32) {
                 feedback
                 section("Archive API") { archiveSection }
                 if archive.isSignedIn {
@@ -59,6 +66,7 @@ struct ArchiveTray: View {
                         section("Show Inventory") { inventorySection }
                         if let run = archive.run {
                             section("Scanning") { scanningSection(run) }
+                            section("Scanned") { scannedSection(run, scrollTo: proxy) }
                         } else {
                             section("Add Assets") { addAssetsSection }
                         }
@@ -70,6 +78,7 @@ struct ArchiveTray: View {
                 }
             }
             .padding(12)
+        }
         }
     }
 
@@ -208,17 +217,34 @@ struct ArchiveTray: View {
     private var showSection: some View {
         if let show = archive.currentShow {
             HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(show.displayName).font(.headline)
-                    Text(show.id).font(.caption.monospaced()).foregroundStyle(.secondary)
-                    if let venue = show.notes?.public, !venue.isEmpty {
-                        Text(venue).font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    // Half again the usual sizes: this is the one thing on
+                    // the panel an operator reads from across the room.
+                    Text(show.displayName)
+                        .font(.system(size: 20, weight: .semibold))
+                        .help("The show every capture is filed under")
+                    Text(show.id)
+                        .font(.system(size: 15, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    if let note = show.notes?.public, !note.isEmpty {
+                        Text(Self.linkedNote(note))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .environment(\.openURL, OpenURLAction { url in
+                                guard url.scheme == Self.noteLinkScheme,
+                                      let term = url.host?.removingPercentEncoding else { return .systemAction }
+                                archive.searchFromNote(term)
+                                return .handled
+                            })
+                            .help("The show's notes. A [bracketed] phrase is a link: click it to search for it.")
                     }
                 }
                 Spacer()
                 Button("Change") { archive.clearShow() }
-                    .disabled(archive.run != nil)
-                    .help(archive.run != nil ? "Finish the row being scanned first" : "Work on a different show")
+                    .help(archive.run != nil
+                          ? "Finish the row being scanned and pick a different show"
+                          : "Work on a different show")
             }
         } else if archive.isCreatingShow {
             createShowForm
@@ -231,6 +257,15 @@ struct ArchiveTray: View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("Search or Create a show", text: $archive.showQuery)
                 .textFieldStyle(.roundedBorder)
+                .focused($searchFocused)
+                .onAppear {
+                    // After Change the field is new to the hierarchy, so the
+                    // focus is asked for here, once it exists.
+                    if archive.wantsSearchFocus {
+                        archive.wantsSearchFocus = false
+                        DispatchQueue.main.async { searchFocused = true }
+                    }
+                }
                 .help("A show code (T316 finds T00316) or any words from a show's name or notes")
             if archive.isSearching {
                 ProgressView().controlSize(.small)
@@ -256,6 +291,15 @@ struct ArchiveTray: View {
                     }
                 }
                 .background(Color(NSColor.textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+                // Shows share names — there are several "Kiss Me, Kate" under
+                // different codes — so finding some is no proof the one in
+                // hand exists. The way to make a new one stays offered.
+                HStack {
+                    Spacer()
+                    Button("Add New…") { archive.beginCreateShow() }
+                        .buttonStyle(.link)
+                        .help("None of these is it: create a new show, named from what you typed")
+                }
             } else if archive.nothingFound {
                 Text("No shows match").font(.caption).foregroundStyle(.secondary)
                 Button("Create Show") { archive.beginCreateShow() }
@@ -288,6 +332,24 @@ struct ArchiveTray: View {
                     .help("Create the show and make it the active show")
             }
         }
+    }
+
+    private static let noteLinkScheme = "filmtether-search"
+
+    /// The note as attributed text, each [bracketed] phrase a link that
+    /// carries its own term in a private URL scheme the card handles.
+    private static func linkedNote(_ note: String) -> AttributedString {
+        var out = AttributedString()
+        for segment in NoteLinks.segments(note) {
+            var piece = AttributedString(segment.text)
+            if let term = segment.term,
+               let encoded = term.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed),
+               let url = URL(string: "\(noteLinkScheme)://\(encoded)") {
+                piece.link = url
+            }
+            out += piece
+        }
+        return out
     }
 
     // MARK: Show Inventory
@@ -342,7 +404,9 @@ struct ArchiveTray: View {
                     if let roll = range.roll, !roll.isEmpty {
                         Text("roll \(roll)").foregroundStyle(.secondary)
                     }
-                    Text(range.range).font(.body.monospacedDigit())
+                    Text(range.range)
+                        .font(.body.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(coverageColor(type, range))
                 }
                 .padding(.vertical, 5)
                 .padding(.horizontal, 8)
@@ -354,8 +418,22 @@ struct ArchiveTray: View {
         }
         .buttonStyle(.plain)
         .disabled(archive.isBusy)
-        .help(hot ? "Captures are going to these assets"
-                  : "Scan these assets: every capture goes to them, starting at \(range.range.split(separator: "-").first.map(String.init) ?? range.range)")
+        .help(coverageText(type, range) + (hot ? " Captures are going to these assets."
+                  : " Click to scan them: every capture goes to them, starting at \(range.range.split(separator: "-").first.map(String.init) ?? range.range)."))
+    }
+
+    /// Green when every frame of the row has a scan in the archive, red when
+    /// none has, yellow in between.
+    private func coverageColor(_ type: InventoryType, _ range: InventoryRange) -> Color {
+        guard let c = archive.coverage(of: type, range), c.total > 0 else { return .secondary }
+        if c.scanned == 0 { return .red }
+        if c.scanned == c.total { return .green }
+        return .yellow
+    }
+
+    private func coverageText(_ type: InventoryType, _ range: InventoryRange) -> String {
+        guard let c = archive.coverage(of: type, range) else { return "" }
+        return "\(c.scanned) of \(c.total) scanned."
     }
 
     /// The inventory row the captures are going to: same type and roll as
@@ -443,6 +521,10 @@ struct ArchiveTray: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+                Text(archive.archivedSummary(of: run))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help("Frames of this row that already have a scan in the archive")
                 if run.isFinished {
                     Text("Row finished")
                         .font(.title2.weight(.semibold))
@@ -473,7 +555,10 @@ struct ArchiveTray: View {
                         .help("Step back one frame to redo the previous one")
                     Button("Skip") { archive.skipNumber() }
                         .disabled(run.isFinished)
-                        .help("This frame isn't there: move on without a capture")
+                        .help("This frame isn't there right now: move on without a capture, leaving the asset in place")
+                    Button("Remove") { Task { await archive.removeCurrent() } }
+                        .disabled(run.isFinished || archive.isBusy)
+                        .help("This negative doesn't exist — the strip was miscounted. Take the asset out of the row, and out of the archive if this station may delete.")
                     Spacer()
                     TextField("№", text: $archive.setNumberText)
                         .textFieldStyle(.roundedBorder)
@@ -499,6 +584,85 @@ struct ArchiveTray: View {
         // The section frame adds its own padding and border; this card is
         // its own, so pull the outer ones back in.
         .padding(-10)
+    }
+
+
+    // MARK: Scanned
+
+    /// The hot row's scanned frames in row order, each the width of the
+    /// panel. Lazy: a picture is fetched when its cell scrolls into view,
+    /// so a long row doesn't load hundreds of images unasked.
+    private static let blockLinkScheme = "filmtether-scanned"
+
+    /// "1-20, 26-35, 55" — the scanned frames as blocks, each a link that
+    /// scrolls the list to the block's first frame.
+    private func blocksLine(_ blocks: [ArchiveModel.ScannedBlock]) -> AttributedString {
+        var out = AttributedString()
+        for (i, block) in blocks.enumerated() {
+            if i > 0 { out += AttributedString(", ") }
+            var piece = AttributedString(block.text)
+            if let url = URL(string: "\(Self.blockLinkScheme)://\(block.firstAssetID)") { piece.link = url }
+            out += piece
+        }
+        return out
+    }
+
+    private func scannedSection(_ run: ScanRun, scrollTo proxy: ScrollViewProxy) -> some View {
+        let frames = archive.frames(of: run)
+        let blocks = archive.scannedBlocks(of: run)
+        return Group {
+            if frames.isEmpty {
+                Text("Thumbnails appear here as frames are scanned")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                // The scanned inventory: which blocks are in, and a way to
+                // jump to any of them without scrolling past the rest.
+                Text(blocksLine(blocks))
+                    .font(.callout.monospacedDigit())
+                    .environment(\.openURL, OpenURLAction { url in
+                        guard url.scheme == Self.blockLinkScheme, let id = url.host else { return .systemAction }
+                        withAnimation { proxy.scrollTo(id, anchor: .top) }
+                        return .handled
+                    })
+                    .help("The frames scanned so far, as blocks. Click one to jump to its first frame below.")
+                    .padding(.bottom, 6)
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    ForEach(frames) { f in
+                        scannedCell(f, in: run)
+                            .id(f.assetID)
+                            .onAppear { archive.requestThumbnail(for: f, in: run) }
+                    }
+                }
+            }
+        }
+    }
+
+    private func scannedCell(_ f: ArchiveModel.Frame, in run: ScanRun) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let t = f.thumbnail {
+                Image(nsImage: t.image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            } else {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color(NSColor.quaternaryLabelColor))
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(3 / 2, contentMode: .fit)
+                    .overlay(ProgressView().controlSize(.small))
+            }
+            // One caption, and which one says where the picture came from:
+            // the frame number while it's a local rendering, the archive's
+            // filename once its own derivative has taken over.
+            let filed = f.thumbnail?.source == .archive
+            Text(filed ? f.assetID : NumberRange.pad(f.label))
+                .font(.callout.monospacedDigit().weight(.semibold))
+                .textSelection(.enabled)
+                .help(filed ? "\(NumberRange.pad(f.label)): the archive's thumbnail, under its filename"
+                            : "\(NumberRange.pad(f.label)): made here from the local file; the archive's filename appears once its derivative exists")
+        }
     }
 
     // MARK: - Queue tab
