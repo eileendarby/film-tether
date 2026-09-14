@@ -7,21 +7,26 @@ struct SettingsView: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
-        TabView {
+        TabView(selection: $model.settingsTab) {
             captureTab()
                 .tabItem { Label("Capture", systemImage: "camera.shutter.button") }
+                .tag(AppModel.SettingsTab.capture)
 
             liveViewTab()
                 .tabItem { Label("Live View", systemImage: "viewfinder") }
+                .tag(AppModel.SettingsTab.liveView)
 
             cameraTab()
                 .tabItem { Label("Camera", systemImage: "camera") }
+                .tag(AppModel.SettingsTab.camera)
 
             hotkeyTab()
                 .tabItem { Label("Hotkeys", systemImage: "keyboard") }
+                .tag(AppModel.SettingsTab.hotkeys)
 
             aboutTab()
                 .tabItem { Label("About", systemImage: "info.circle") }
+                .tag(AppModel.SettingsTab.about)
         }
         .frame(width: 560, height: 460)
         .padding()
@@ -108,22 +113,29 @@ struct SettingsView: View {
     private func cameraTab() -> some View {
         Form {
             Section("Camera clock") {
-                if let cameraTime = model.snapshot.cameraDateTime {
-                    HStack {
-                        Text("Camera reports")
-                        Spacer()
-                        Text(Self.fullClockFormatter.string(from: cameraTime))
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundStyle(.secondary)
+                // Reconstructed from the stored offset and re-rendered each
+                // second, the same way the footer does it. The raw reading in
+                // the snapshot is whatever the driver handed over at connect —
+                // it caches the property for the session — so subtracting it
+                // from a ticking `Date()` made the drift climb one second per
+                // second and stay red, and a successful sync (which zeroes the
+                // offset) looked like it had done nothing.
+                if let offset = model.snapshot.cameraClockOffset {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        HStack {
+                            Text("Camera clock")
+                            Spacer()
+                            Text(Self.fullClockFormatter.string(from: context.date.addingTimeInterval(offset)))
+                                .font(.system(.body, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                    let drift = cameraTime.timeIntervalSinceNow
-                    let absDrift = abs(drift)
                     HStack {
                         Text("Drift vs host")
                         Spacer()
-                        Text(driftString(drift))
+                        Text(driftString(offset))
                             .font(.system(.body, design: .monospaced))
-                            .foregroundStyle(absDrift > 60 ? .red : .secondary)
+                            .foregroundStyle(abs(offset) > 60 ? .red : .secondary)
                     }
                 } else {
                     Text("No clock reading yet, connect a camera to read.")

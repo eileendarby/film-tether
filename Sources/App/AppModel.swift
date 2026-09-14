@@ -78,6 +78,17 @@ final class AppModel: ObservableObject {
     @Published private(set) var latestFrame: NSImage? = nil
     @Published private(set) var lastCapture: String? = nil
     @Published private(set) var capturedFiles: [URL] = []
+    /// The `{seq}` the next capture will be named with. Mirrors CameraCapture's
+    /// session counter, which lives on the camera actor and starts over whenever
+    /// the capture object is rebuilt on reconnect, so the footer can name the
+    /// next file without an actor hop.
+    @Published private(set) var nextCaptureSequence: Int = 1
+
+    enum SettingsTab: Hashable { case capture, liveView, camera, hotkeys, about }
+    /// The Settings window's current tab. Bound to its TabView so a control
+    /// elsewhere (the footer's capture-path link) can open Settings on the tab
+    /// it is about.
+    @Published var settingsTab: SettingsTab = .capture
     @Published private(set) var zoomMode: LiveZoom.Mode = .fit
     @Published private(set) var zoomFallbackActive: Bool = false
     /// Relative focus index: client-side running total of commanded manual-focus
@@ -925,6 +936,7 @@ final class AppModel: ObservableObject {
             let props = await CameraProperties(session: sess)
             self.properties = props
             self.capture = await CameraCapture(session: sess, properties: props)
+            self.nextCaptureSequence = 1   // fresh CameraCapture, fresh counter
             let lv = await LiveView(session: sess, properties: props)
             self.liveView = lv
             self.liveZoom = await LiveZoom(session: sess)
@@ -1266,6 +1278,7 @@ final class AppModel: ObservableObject {
 
         if let result = captureResult {
             self.lastCapture = result.path.lastPathComponent
+            self.nextCaptureSequence = result.sequence + 1
             self.capturedFiles.append(contentsOf: result.allPaths)
             // Dimensions only — read from the file's metadata without decoding
             // it. The crop is defined on the preview but applied to this, so its

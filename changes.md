@@ -2,6 +2,40 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-09-13 — Settings → Camera: the drift readout climbed forever and the sync looked dead
+
+The "Drift vs host" figure in Settings → Camera went red and grew by a second
+every second, and "Sync camera clock to host now" appeared to do nothing about
+it.
+
+The readout subtracted the raw camera timestamp in the snapshot from a ticking
+`Date()`. The ptp2 driver hands back the same connect-time reading for the
+whole session, so that difference could only grow. The sync itself was fine —
+it zeroes the stored camera-vs-host offset, which is what the footer clock
+reads — but this tab never looked at the offset.
+
+It now shows the camera clock reconstructed from the offset, ticking with the
+host, and the drift is the offset itself: steady while the camera's clock is
+steady, and zero after a sync. Same fix the footer got earlier.
+
+## 2026-09-13 — The footer shows where the next capture will go
+
+The right end of the status bar now shows the folder and filename the next
+shutter press will produce, e.g. `Destination: /Users/alex/Pictures/Film Tether/IMG_20260913_142233_0004.CR3`,
+with the time ticking so it reads as a prediction rather than a file that
+exists. It is built by the same resolver capture uses, so it cannot drift from
+what is written. The extension is taken from the last file the camera produced
+this session; before any capture the `{ext}` token is shown as-is rather than
+guessed. The sequence number is the one the next capture will actually get —
+`CaptureResult` now reports the counter it consumed, and the model resets its
+mirror whenever the capture object is rebuilt on reconnect, which is when the
+counter itself starts over.
+
+Clicking it opens Settings on the Capture tab, where both halves are changed.
+The Settings window's TabView is now bound to a selection on the model so a
+control elsewhere can pick the tab; SwiftUI's own remembered-tab index no
+longer applies.
+
 ## 2026-09-13 — Remove the one-tab tab bar
 
 The window opened with a tab bar across the top holding a single tab and a

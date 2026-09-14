@@ -3,6 +3,8 @@ import Camera
 
 struct StatusFooter: View {
     @EnvironmentObject var model: AppModel
+    @ObservedObject private var settings = AppSettings.shared
+    @Environment(\.openSettings) private var openSettings
 
     /// MMM d, HH:mm:ss, readable but compact for the status bar.
     static let cameraClockFormatter: DateFormatter = {
@@ -127,7 +129,39 @@ struct StatusFooter: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
+            // Where the next shutter press will land, folder and all, named as
+            // it would be if pressed right now — the seconds tick so it reads
+            // as a live prediction rather than a file that already exists.
+            // Clicking it opens the Settings tab where both halves are set.
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                Button {
+                    model.settingsTab = .capture
+                    openSettings()
+                } label: {
+                    Text("Destination: \(nextCapturePath(at: context.date))")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .buttonStyle(.plain)
+                .help("The folder and name the next capture will be saved with. Click to change either in Settings → Capture.")
+            }
         }
+    }
+
+    /// Folder plus resolved filename for a capture taken at `date`. Reuses the
+    /// capture's own resolver so this can't drift from what gets written. The
+    /// extension comes from the last file the camera produced this session;
+    /// before any capture the `{ext}` token is shown as-is rather than guessed.
+    private func nextCapturePath(at date: Date) -> String {
+        let ext = model.lastCapture.map { ($0 as NSString).pathExtension }
+        let name = CameraCapture.resolveFilename(
+            pattern: settings.filenamePattern, timestamp: date,
+            sequence: model.nextCaptureSequence,
+            cameraExtension: (ext?.isEmpty == false) ? ext : nil
+        )
+        return settings.captureFolder.appendingPathComponent(name).path
     }
 
     @ViewBuilder

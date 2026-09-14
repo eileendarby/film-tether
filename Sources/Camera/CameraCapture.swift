@@ -52,6 +52,8 @@ public final class CameraCapture {
         public let iso: String?
         public let shutter: String?
         public let aperture: String?
+        /// The `{seq}` this capture was named with; the next one gets one more.
+        public let sequence: Int
     }
 
     private let session: CameraSession
@@ -194,7 +196,8 @@ public final class CameraCapture {
             timestamp: timestamp,
             iso: iso,
             shutter: shutter,
-            aperture: aperture
+            aperture: aperture,
+            sequence: sessionSeq
         )
     }
 
