@@ -77,6 +77,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var snapshot = PropertySnapshot()
     @Published private(set) var latestFrame: NSImage? = nil
     @Published private(set) var lastCapture: String? = nil
+    /// Where the last capture landed, so the footer can reveal it in Finder.
+    @Published private(set) var lastCaptureURL: URL? = nil
     @Published private(set) var capturedFiles: [URL] = []
     /// The `{seq}` the next capture will be named with. Mirrors CameraCapture's
     /// session counter, which lives on the camera actor and starts over whenever
@@ -1278,6 +1280,7 @@ final class AppModel: ObservableObject {
 
         if let result = captureResult {
             self.lastCapture = result.path.lastPathComponent
+            self.lastCaptureURL = result.path
             self.nextCaptureSequence = result.sequence + 1
             self.capturedFiles.append(contentsOf: result.allPaths)
             // Dimensions only — read from the file's metadata without decoding

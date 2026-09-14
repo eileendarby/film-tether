@@ -122,12 +122,22 @@ struct StatusFooter: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
             }
+            // Clicking the last capture reveals it in Finder, selected, so the
+            // file that was just written is one click from being looked at.
             if let last = model.lastCapture {
-                Text("Last: \(last)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                Button {
+                    if let url = model.lastCaptureURL {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    }
+                } label: {
+                    Text("Last: \(last)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .buttonStyle(.plain)
+                .help("Show the last captured file in Finder")
             }
             // Where the next shutter press will land, folder and all, named as
             // it would be if pressed right now — the seconds tick so it reads

@@ -2,6 +2,12 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-09-13 — Click the last capture to see it in Finder
+
+The "Last: IMG_….CR3" readout in the footer is now a link: clicking it opens a
+Finder window on the capture folder with that file selected. The model keeps
+the URL of the last primary file alongside its name for this.
+
 ## 2026-09-13 — Settings → Camera: the drift readout climbed forever and the sync looked dead
 
 The "Drift vs host" figure in Settings → Camera went red and grew by a second
