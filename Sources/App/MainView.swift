@@ -1,4 +1,5 @@
 import SwiftUI
+import Scan
 
 struct MainView: View {
     @EnvironmentObject var model: AppModel
@@ -7,7 +8,34 @@ struct MainView: View {
     /// offscreen copy. This is the narrowest the window may ever be: below it
     /// a control would be clipped. Measured rather than hardcoded so it stays
     /// right as buttons are added.
-    @State private var compactBarWidth: CGFloat = 0
+    /// What the toolbar's pieces measure — the fixed part, each toggle
+    /// labelled, each as an icon — from hidden copies laid out once, not per
+    /// frame. The layout for any width is then arithmetic (ToolbarLayout),
+    /// and one bar is rendered. Asking ViewThatFits to measure two dozen
+    /// whole bars every layout pass made resizing crawl.
+    @State private var pieceWidths = ToolbarLayout.Widths(
+        fixed: 0,
+        items: ExposureBar.compactable.map { ToolbarLayout.Item(labelled: 0, compact: $0 ? 0 : nil) },
+        spacing: 10
+    )
+    /// The room the bar's row has, including the bar's own side paddings.
+    @State private var barRoom: CGFloat = 0
+
+    /// The bar's side paddings, applied in `exposureBar`.
+    private static let barPadding: CGFloat = 16 + 24
+
+    /// The narrowest the bar can be: every toggle an icon on the second
+    /// row. This is the window's minimum width.
+    private var compactBarWidth: CGFloat {
+        guard pieceWidths.fixed > 0 else { return 0 }
+        return ToolbarLayout.narrowest(items: ExposureBar.itemCount, compactable: ExposureBar.toggleCount)
+            .width(pieceWidths) + Self.barPadding
+    }
+
+    private var chosenLayout: ToolbarLayout {
+        guard pieceWidths.fixed > 0, barRoom > 0 else { return .row(labelled: ExposureBar.toggleCount) }
+        return ToolbarLayout.choose(available: barRoom - Self.barPadding, widths: pieceWidths)
+    }
 
     /// The tray's width, in points. Starts from the remembered value and is
     /// written back as the handle is dragged. Owned here rather than read
@@ -40,16 +68,28 @@ struct MainView: View {
         }
         .onChange(of: trayWidth) { _, w in AppSettings.shared.archiveTrayWidth = Double(w) }
         .background(Color(NSColor.windowBackgroundColor))
-        // Offscreen copy of the icons-only bar, purely to learn its natural
-        // width. `.fixedSize` makes it report what it actually wants rather
-        // than accepting whatever the window currently offers; `.hidden` keeps
-        // it invisible, and as a background it can't affect the real layout.
+        // Offscreen copies of the bar's pieces, purely to learn their natural
+        // widths. `.fixedSize` makes each report what it actually wants rather
+        // than accepting whatever the window offers; `.hidden` keeps them
+        // invisible, and as a background they can't affect the real layout.
         .background(alignment: .topLeading) {
-            exposureBar(labelled: 0, stacked: true)
-                .fixedSize()
-                .background(WidthReporter { compactBarWidth = $0 })
-                .hidden()
-                .allowsHitTesting(false)
+            VStack(alignment: .leading, spacing: 0) {
+                ExposureBar(measuring: .fixed)
+                    .fixedSize()
+                    .background(WidthReporter { w in if pieceWidths.fixed != w { pieceWidths.fixed = w } })
+                ForEach(0..<ExposureBar.itemCount, id: \.self) { i in
+                    ExposureBar(measuring: .item(i, labelled: true))
+                        .fixedSize()
+                        .background(WidthReporter { w in if pieceWidths.items[i].labelled != w { pieceWidths.items[i].labelled = w } })
+                    if ExposureBar.compactable[i] {
+                        ExposureBar(measuring: .item(i, labelled: false))
+                            .fixedSize()
+                            .background(WidthReporter { w in if pieceWidths.items[i].compact != w { pieceWidths.items[i].compact = w } })
+                    }
+                }
+            }
+            .hidden()
+            .allowsHitTesting(false)
         }
         .background(
             WindowMinContentSize(
@@ -81,7 +121,7 @@ struct MainView: View {
                 // ExposureBar wrapped in horizontal scroll so the row of pickers + buttons
                 // never gets clipped when the window is narrow.
                 // Full-width bar when it fits, icons-only when it doesn't.
-                // ViewThatFits does the choosing, so the switch happens exactly
+                // ToolbarLayout does the choosing, so the switch happens exactly
                 // when the labels would start being clipped rather than at a
                 // hand-guessed pixel threshold — an earlier attempt used a
                 // constant and got it wrong in the worst direction, leaving
@@ -104,29 +144,12 @@ struct MainView: View {
                 // minLength 0 fills the same space while leaving the bar's own
                 // minimum intact to propagate up as the window minimum.
                 HStack(spacing: 0) {
-                    // Widest first: every toggle labelled, then one fewer, and
-                    // so on down to icons only — so labels return one button at
-                    // a time as room allows, left to right, on a single row.
-                    ViewThatFits(in: .horizontal) {
-                        exposureBar(labelled: 9)
-                        exposureBar(labelled: 8)
-                        exposureBar(labelled: 7)
-                        exposureBar(labelled: 6)
-                        exposureBar(labelled: 5)
-                        exposureBar(labelled: 4)
-                        exposureBar(labelled: 3)
-                        exposureBar(labelled: 2)
-                        exposureBar(labelled: 1)
-                        exposureBar(labelled: 0)
-                        exposureBar(labelled: 0, stacked: true)
-                    }
-                    // Sized before the Spacer, with the whole width on offer.
-                    // Without this the stack splits the room between the two
-                    // and asks the bar whether it fits in half — so the full
-                    // layout was never chosen however wide the window.
-                    .layoutPriority(1)
+                    // The one layout for this width — see ToolbarLayout for
+                    // the sequence — chosen from the measured pieces.
+                    exposureBar(chosenLayout)
                     Spacer(minLength: 0)
                 }
+                .background(WidthReporter { w in if barRoom != w { barRoom = w } })
                 .fixedSize(horizontal: false, vertical: true)
                 .layoutPriority(1)   // chrome is sized before the preview pane
                 Divider()
@@ -144,10 +167,10 @@ struct MainView: View {
     /// so a close estimate is enough — the layout itself measures for real.
     private var chromeHeightEstimate: CGFloat { 170 }   // two toolbar rows at the narrowest
 
-    /// One layout variant of the toolbar. Padding lives inside so ViewThatFits
+    /// One layout variant of the toolbar. Padding lives inside so the measured
     /// measures the real footprint, not the bare content.
-    private func exposureBar(labelled: Int, stacked: Bool = false) -> some View {
-        ExposureBar(labelled: labelled, stacked: stacked)
+    private func exposureBar(_ layout: ToolbarLayout) -> some View {
+        ExposureBar(layout: layout)
             .padding(.leading, 16)
             .padding(.trailing, 24)   // last button isn't flush to the window edge
             .padding(.vertical, 10)

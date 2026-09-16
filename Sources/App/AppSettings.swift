@@ -273,11 +273,12 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(archiveTrayWidth, forKey: Key.archiveTrayWidth) }
     }
 
-    /// The film is on the light table emulsion-up, toward the lens — the
-    /// rule, and the default. Off means emulsion-down: every capture is a
-    /// mirror image, the preview is mirrored back so the operator sees the
-    /// picture the right way round, and each scan is sent with `flop` so
-    /// the archive does the same.
+    /// The film is on the light table emulsion-up — the rule, and the
+    /// default. On this rig that makes every capture a mirror image (as
+    /// measured; the theory said the opposite), so while it is on the
+    /// preview is mirrored back and each scan is sent with `flop` so the
+    /// archive does the same. Off, for a strip lying emulsion-down, nothing
+    /// is mirrored.
     @Published var emulsionUp: Bool {
         didSet { defaults.set(emulsionUp, forKey: Key.emulsionUp) }
     }

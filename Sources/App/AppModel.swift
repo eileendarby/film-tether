@@ -355,17 +355,20 @@ final class AppModel: ObservableObject {
     }
 
     /// The whole rotation applied to the preview, normalized to 0..<360.
-    /// The turn and, emulsion-down, the mirror. Every display↔sensor mapping
-    /// and the frame itself go through this.
+    /// The turn and, emulsion-up, the mirror: on this rig a negative lying
+    /// emulsion-up comes off the sensor as a mirror image (measured, against
+    /// the theory that said otherwise), so the preview is mirrored back and
+    /// the archive told to do the same. Every display↔sensor mapping and the
+    /// frame itself go through this.
     var previewOrientation: PreviewOrientation {
-        PreviewOrientation(rotation: previewRotation, mirrored: !AppSettings.shared.emulsionUp)
+        PreviewOrientation(rotation: previewRotation, mirrored: AppSettings.shared.emulsionUp)
     }
 
     /// Emulsion up (the rule) or down. Switching mirrors the preview, so a
     /// crop box on screen is reflected with it to stay on the same film.
     func setEmulsionUp(_ up: Bool) {
         guard up != AppSettings.shared.emulsionUp else { return }
-        cropRect = cropRect.map(PreviewOrientation.mirrorDisplayRect)
+        cropRect = cropRect.map(previewOrientation.mirrorToggledDisplayRect)
         AppSettings.shared.emulsionUp = up
         objectWillChange.send()
         appLog.info("emulsion \(up ? "up" : "down", privacy: .public)")
@@ -630,7 +633,7 @@ final class AppModel: ObservableObject {
         let info = Bundle.main.infoDictionary
         return CaptureAttributes(
             rotate: previewRotation.rawValue,
-            flop: !AppSettings.shared.emulsionUp,
+            flop: AppSettings.shared.emulsionUp,
             crop: crop,
             whiteBalance: whiteBalance,
             // What the operator set the preview to says what the film is: the
@@ -882,10 +885,9 @@ final class AppModel: ObservableObject {
         // The box is stored in display space, so a quarter turn of the view
         // would otherwise leave it pointing at different film. Turning it the
         // same way keeps it on the negative it was put on.
-        // Under the mirror a clockwise turn of the film is a counter-clockwise
-        // one on screen, so the box turns the other way to follow it.
-        let turn: PreviewRotation = previewOrientation.mirrored ? .cw270 : .cw90
-        cropRect = cropRect.map { turn.displayRect(fromSensor: $0) }
+        // The mirror sits before the turn, so a quarter turn of the view is a
+        // quarter turn of the box on screen whichever way the film lies.
+        cropRect = cropRect.map { PreviewRotation.cw90.displayRect(fromSensor: $0) }
         // The button is for getting the negative the right way up, so it lands
         // on an exact quarter turn — straightening is a separate adjustment and
         // carrying it through would mean the button never reaches 0/90/180/270.
@@ -895,8 +897,7 @@ final class AppModel: ObservableObject {
     }
 
     func rotatePreviewLeft() {
-        let turn: PreviewRotation = previewOrientation.mirrored ? .cw90 : .cw270
-        cropRect = cropRect.map { turn.displayRect(fromSensor: $0) }
+        cropRect = cropRect.map { PreviewRotation.cw270.displayRect(fromSensor: $0) }
         previewFineRotation = 0
         previewRotation = previewRotation.rotatedLeft
         appLog.info("preview rotation → \(self.previewRotation.rawValue, privacy: .public)°")

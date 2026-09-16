@@ -2,27 +2,68 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-09-15 — The preview flops before it turns, as the archive does
+
+The preview mirrored after the quarter turn; the archive mirrors before it.
+A mirror and a quarter turn don't commute — the two orders differ by a half
+turn, and being about the centre is exactly what makes the difference that
+clean — so with Emulsion Up and a turned preview, the picture on screen was
+a half turn from the derivative. The archive demonstrated it on a marked
+pixel; that demonstration is now a test. The preview now mirrors in sensor
+space and then turns, every display↔sensor mapping follows suit, a crop box
+on screen reflects top-to-bottom rather than left-to-right when the mirror
+is toggled under a turned preview, and the rotate buttons turn the box the
+same way whichever way the film lies.
+
+## 2026-09-15 — Emulsion Up mirrors, as measured
+
+With *Emulsion Up* ticked the preview was the wrong way round. On this rig a
+negative lying emulsion-up comes off the sensor mirrored — the opposite of
+what the theory said — so the mirror now applies while the box is ticked,
+and each scan goes up with `flop: true`; unticked, for a strip lying
+emulsion-down, nothing is mirrored and `flop` is false. The checkbox keeps
+its meaning and its default; only what it does changed.
+
+## 2026-09-15 — The toolbar is laid out by arithmetic, not by trial
+
+The layout sequence was chosen by handing `ViewThatFits` every candidate —
+two dozen whole toolbars, menus and all — and it measured them on every
+layout pass, which with live view running is every frame. The app crawled
+and resizing stuttered. Now seventeen hidden pieces (the fixed part, each
+toggle labelled, each as an icon) are measured once, `ToolbarLayout` picks
+the widest layout that fits by adding them up, and one bar is rendered. The
+sequence is unchanged and now has tests.
+
 ## 2026-09-15 — Live view starts itself
 
 When a camera connects, live view is started without being asked, after the
 clock sync so the two writes don't race for the USB pipe. If it fails the
 Live button is there to try again.
 
-## 2026-09-15 — Toolbar labels return one button at a time
+## 2026-09-15 — Toolbar layouts, in order
 
-The bar stayed icons-only however wide the window. Two causes. Its
-`ViewThatFits` sits beside a `Spacer` in an `HStack`, and a stack proposes
-width to its children by dividing the room among them, so the bar was asked
-whether it fitted in half the width; it now has layout priority and is
-offered the whole width. And the labelled row is over 2000 pt, which no
-laptop screen has beside the tray, so it never fitted and the bar fell
-straight to icons.
+The bar stayed icons-only however wide the window: its `ViewThatFits` sat
+beside a `Spacer` in an `HStack`, which offered it half the width; it now has
+layout priority and is offered all of it. And the bar now has a defined
+sequence of layouts, widest first, the first that fits being shown:
 
-There is no longer one labelled layout and one icon layout. The row is
-tried with every toggle labelled, then one fewer, and so on down to icons
-only, and the widest that fits is used — so labels come back one button at
-a time, left to right, as the window widens, on a single row. The
-manual-focus stepper unfolds from its menu after the last label.
+1. One row, every toggle labelled; then labels go from the right — Archive
+   first, then Box, Peaking, Crop, Auto-Crop… — until all eight toggles are
+   icons.
+2. A second row. Buttons drop to it from the right, one at a time — the
+   toggles first, Archive then Box…, then Rotate, Zoom, Live and Capture —
+   and a button on the second row is labelled.
+3. With everything on the second row, its toggles go compact from the left
+   until all are icons. That is the window's minimum width: the wider of
+   the pickers row and the second row.
+
+Capture, Live, Zoom and Rotate drop to the second row too because the
+sequence needs the second row to be the wider one for step 3 to mean
+anything; with them on the first row it never was.
+
+Capture, live view, zoom and rotation keep their text throughout. The
+manual-focus stepper never unfolds: it is two lines tall and read as the bar
+growing a row, so it stays a menu; the keys are the same.
 
 ## 2026-09-15 — The archive as the destination
 

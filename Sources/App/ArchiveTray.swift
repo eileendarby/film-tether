@@ -529,7 +529,7 @@ struct ArchiveTray: View {
                     .help("Frames of this row that already have a scan in the archive")
                 Toggle("Emulsion Up", isOn: Binding(get: { settings.emulsionUp }, set: { model.setEmulsionUp($0) }))
                     .toggleStyle(.checkbox)
-                    .help("The film is lying emulsion-up, toward the lens — the rule. Untick for a strip that had to go emulsion-down: the preview is mirrored back so it reads correctly, and each scan is sent with flop so the archive does the same.")
+                    .help("The film is lying emulsion-up — the rule. On this rig that makes the capture a mirror image, so the preview is mirrored back and each scan is sent with flop so the archive does the same. Untick for a strip lying emulsion-down, which needs no mirror.")
                 if run.isFinished {
                     Text("Row finished")
                         .font(.title2.weight(.semibold))

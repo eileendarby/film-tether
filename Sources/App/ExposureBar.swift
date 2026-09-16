@@ -5,47 +5,104 @@ import Scan
 struct ExposureBar: View {
     @EnvironmentObject var model: AppModel
 
-    /// Collapse the secondary toggles to icons. Chosen by `ViewThatFits` in
-    /// MainView rather than by a width threshold, so the switch lands exactly
-    /// where the labels stop fitting. Capture, live view, rotation
-    /// and zoom keep their text at every size — they're the controls you reach
-    /// for constantly, and the last two double as state readouts whose value
-    /// (the angle, the percentage) can't be shown by an icon at all.
-    /// How many of the toggles carry a label, counted left to right; the rest
-    /// are icons. MainView tries every count from all down to none and keeps
-    /// the largest that fits, so labels come back one button at a time as the
-    /// window widens, and the row never gives up its single line. Beyond the
-    /// last toggle, the manual-focus stepper unfolds from its menu.
-    var labelled: Int = ExposureBar.expandable
+    /// The layout for this width, chosen by MainView from measured piece
+    /// widths (see `ToolbarLayout`), so one bar is rendered per frame rather
+    /// than a couple of dozen candidates measured.
+    ///
+    /// Capture, live view, zoom and rotation keep their text at every size —
+    /// they're the controls you reach for constantly, and the last two double
+    /// as state readouts whose value (the angle, the percentage) can't be
+    /// shown by an icon — but they do drop to the second row after the
+    /// toggles. The manual-focus stepper is never unfolded: it is two lines
+    /// tall and read as the bar growing a row, so it stays a menu.
+    var layout: ToolbarLayout = .row(labelled: ExposureBar.toggleCount)
 
+    /// Render one piece alone, offscreen, so MainView can measure it. Nil
+    /// for the real bar.
+    var measuring: Piece? = nil
+
+    enum Piece: Equatable {
+        /// Pickers, dividers, the focus menu.
+        case fixed
+        /// One item, labelled or as an icon.
+        case item(Int, labelled: Bool)
+    }
+
+    /// Items in bar order: the four always-labelled buttons, then the eight
+    /// toggles.
+    static let fixedButtonCount = 4
     static let toggleCount = 8
-    static let expandable = toggleCount + 1
+    static let itemCount = fixedButtonCount + toggleCount
+    static let compactable: [Bool] = Array(repeating: false, count: fixedButtonCount)
+        + Array(repeating: true, count: toggleCount)
 
-    private func labelled(_ slot: Int) -> Bool { slot < labelled }
-
-    /// Two rows, for a window too narrow even for the icons-only bar: the
-    /// pickers on one line, the buttons on the next. This is the narrowest
-    /// layout, so it is also the one the window minimum is measured from.
-    var stacked: Bool = false
+    /// Whether toggle `slot` (0…7) shows its label.
+    private func labelled(_ slot: Int) -> Bool {
+        let item = Self.fixedButtonCount + slot
+        if case .item(let i, let l) = measuring, i == item { return l }
+        return layout.isLabelled(item: item, compactable: Self.compactable)
+    }
 
     var body: some View {
-        if stacked {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 10) { pickers }
+        switch measuring {
+        case .fixed:
+            HStack(spacing: 10) { fixedPart }
+        case .item(let i, _):
+            item(i)
+        case nil:
+            switch layout {
+            case .row:
                 HStack(spacing: 10) {
-                    focusGroup()
-                    Divider().frame(height: 28)
-                    actions
+                    fixedPart
+                    items(0..<Self.itemCount)
+                }
+            case .wrapped(let moved, _):
+                let split = Self.itemCount - moved
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 10) {
+                        fixedPart
+                        items(0..<split)
+                    }
+                    HStack(spacing: 10) {
+                        items(split..<Self.itemCount)
+                    }
                 }
             }
-        } else {
-            HStack(spacing: 10) {
-                pickers
-                Divider().frame(height: 28)
-                focusGroup()
-                Divider().frame(height: 28)
-                actions
-            }
+        }
+    }
+
+    /// Everything before the items.
+    @ViewBuilder
+    private var fixedPart: some View {
+        pickers
+        Divider().frame(height: 28)
+        focusGroup()
+        Divider().frame(height: 28)
+    }
+
+    @ViewBuilder
+    private func items(_ range: Range<Int>) -> some View {
+        ForEach(Array(range), id: \.self) { i in
+            item(i)
+        }
+    }
+
+    @ViewBuilder
+    private func item(_ i: Int) -> some View {
+        switch i {
+        case 0: captureButton()
+        case 1: liveViewToggle()
+        case 2: zoomToggleButton()
+        case 3: rotateButton()
+        case 4: invertToggleButton()
+        case 5: monoToggleButton()
+        case 6: whiteBalanceButton()
+        case 7: autoCropButton()
+        case 8: cropToggleButton()
+        case 9: peakingToggleButton()
+        case 10: boxToggleButton()
+        case 11: archiveToggleButton()
+        default: EmptyView()
         }
     }
 
@@ -73,22 +130,6 @@ struct ExposureBar: View {
             whiteBalancePicker()
             kelvinStepper()
             imageFormatPicker()
-    }
-
-    @ViewBuilder
-    private var actions: some View {
-            captureButton()
-            liveViewToggle()
-            zoomToggleButton()
-            rotateButton()
-            invertToggleButton()
-            monoToggleButton()
-            whiteBalanceButton()
-            autoCropButton()
-            cropToggleButton()
-            peakingToggleButton()
-            boxToggleButton()
-            archiveToggleButton()
     }
 
     /// Show or put away the archive tray on the right. Always enabled: the
@@ -465,11 +506,10 @@ struct ExposureBar: View {
     /// focus is set once and left, so the compact bar folds them away. The
     /// keys (, and . with Option/Control) work either way.
     private func focusGroup() -> some View {
-        if labelled > Self.toggleCount {
-            focusStepper()
-        } else {
-            focusMenu()
-        }
+        // Always the menu. The six-button stepper is two lines tall and made
+        // the bar look like it had grown a second row; the keys and the menu
+        // do the same job at one line.
+        focusMenu()
     }
 
     private func focusMenu() -> some View {

@@ -2,10 +2,11 @@ import Foundation
 import CoreGraphics
 import AppKit
 
-/// How the sensor frame is turned for display: a quarter turn, then, if the
-/// film is lying emulsion-down, a left-to-right mirror so the operator sees
-/// the picture the right way round. The mirror is applied *after* the turn,
-/// which is also the order the archive undoes them in (`rotate`, `flop`).
+/// How the sensor frame is turned for display: if the film came off the
+/// sensor mirrored, a left-to-right mirror first, then the quarter turn —
+/// the archive's order (`flop`, then `rotate`). The order matters: a mirror
+/// and a quarter turn don't commute, the two orders differ by a half turn,
+/// and being about the centre is what makes the difference exactly that.
 ///
 /// Everything that maps between what's on screen and the sensor — the
 /// metering box, the crop box, the eyedropper — goes through this rather
@@ -29,18 +30,19 @@ public struct PreviewOrientation: Equatable, Sendable {
     // MARK: - Point mapping
 
     public func displayPoint(fromSensor p: CGPoint) -> CGPoint {
-        let d = rotation.displayPoint(fromSensor: p)
-        return mirrored ? CGPoint(x: 1 - d.x, y: d.y) : d
+        rotation.displayPoint(fromSensor: mirrored ? CGPoint(x: 1 - p.x, y: p.y) : p)
     }
 
     public func sensorPoint(fromDisplay p: CGPoint) -> CGPoint {
-        rotation.sensorPoint(fromDisplay: mirrored ? CGPoint(x: 1 - p.x, y: p.y) : p)
+        let s = rotation.sensorPoint(fromDisplay: p)
+        return mirrored ? CGPoint(x: 1 - s.x, y: s.y) : s
     }
 
-    /// A direction on screen, in sensor terms. The mirror reverses left and
-    /// right and nothing else.
+    /// A direction on screen, in sensor terms. The mirror reverses the
+    /// sensor's left and right, after the turn has been undone.
     public func sensorDelta(fromDisplay d: CGVector) -> CGVector {
-        rotation.sensorDelta(fromDisplay: mirrored ? CGVector(dx: -d.dx, dy: d.dy) : d)
+        let s = rotation.sensorDelta(fromDisplay: d)
+        return mirrored ? CGVector(dx: -s.dx, dy: s.dy) : s
     }
 
     public func displayRect(fromSensor r: CGRect) -> CGRect {
@@ -53,10 +55,15 @@ public struct PreviewOrientation: Equatable, Sendable {
                   sensorPoint(fromDisplay: CGPoint(x: r.maxX, y: r.maxY)))
     }
 
-    /// A display-space rect reflected left to right — what a box on screen
-    /// needs when the mirror is switched on or off under it.
-    public static func mirrorDisplayRect(_ r: CGRect) -> CGRect {
-        CGRect(x: 1 - r.maxX, y: r.minY, width: r.width, height: r.height)
+    /// A display-space rect as it appears once the mirror is switched on or
+    /// off under it. The mirror is in sensor space, before the turn, so on
+    /// screen it reads left-to-right at 0° and 180° and top-to-bottom at 90°
+    /// and 270°.
+    public func mirrorToggledDisplayRect(_ r: CGRect) -> CGRect {
+        if rotation == .cw90 || rotation == .cw270 {
+            return CGRect(x: r.minX, y: 1 - r.maxY, width: r.width, height: r.height)
+        }
+        return CGRect(x: 1 - r.maxX, y: r.minY, width: r.width, height: r.height)
     }
 
     private static func span(_ a: CGPoint, _ b: CGPoint) -> CGRect {
@@ -77,8 +84,8 @@ public struct PreviewOrientation: Equatable, Sendable {
     }
 
     public func apply(_ cg: CGImage) -> CGImage? {
-        guard let turned = rotation.rotate(cg) else { return nil }
-        return mirrored ? Self.mirror(turned) : turned
+        guard let base = mirrored ? Self.mirror(cg) : cg else { return nil }
+        return rotation.rotate(base)
     }
 
     /// Reflect left to right. Same bitmap setup as `PreviewRotation.rotate`:
