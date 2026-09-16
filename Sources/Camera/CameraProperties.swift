@@ -86,6 +86,10 @@ public final class CameraProperties {
         public var battery: String?
         public var focusMode: String?
         public var meteringMode: String?
+        /// The body's own name ("Canon EOS R5") and the lens on it, for the
+        /// archive's record of what made a scan.
+        public var cameraModel: String?
+        public var lensName: String?
         /// Unix timestamp the camera believes it's at. Read from the `datetime`
         /// widget (TEXT or DATE depending on libgphoto2 build). Used by the
         /// status footer to show whether the body's clock is correct; if it's
@@ -136,6 +140,8 @@ public final class CameraProperties {
         snap.imageFormat = readStringLeaf("imageformat")
         snap.battery = readStringLeaf("batterylevel")
         snap.focusMode = readStringLeaf("focusmode")
+        snap.cameraModel = readStringLeaf("cameramodel")
+        snap.lensName = readStringLeaf("lensname")
         snap.meteringMode = readStringLeaf("meteringmode")
         // Camera datetime is exposed by libgphoto2's Canon EOS driver as a DATE
         // widget at leaf `datetime` (value = Unix timestamp as Int via gp_widget_get_value).

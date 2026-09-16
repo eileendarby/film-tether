@@ -5,6 +5,7 @@ import os
 import Camera
 import Hotkey
 import Scan
+import Archive
 import ImageIO
 
 private let appLog = Logger(subsystem: "co.wonders.filmtether", category: "AppModel")
@@ -54,6 +55,8 @@ final class AppModel: ObservableObject {
         var imageFormat: String = "—"
         var battery: String = "—"
         var meteringMode: String = "—"
+        var cameraModel: String? = nil
+        var lensName: String? = nil
         var cameraDateTime: Date? = nil
         /// Camera clock minus host clock at the last read. See
         /// `refreshSnapshot` for why the offset is stored rather than only the
@@ -172,7 +175,7 @@ final class AppModel: ObservableObject {
     /// Aspect ratio the preview pane should letterbox to. The body streams 3:2
     /// at every zoom level, so only rotation can change this.
     var previewAspectRatio: CGFloat {
-        previewRotation.displayAspect(sensorAspect: 3.0 / 2.0)
+        previewOrientation.displayAspect(sensorAspect: 3.0 / 2.0)
     }
 
     /// How the preview is scaled on screen. Session state, not persisted —
@@ -238,7 +241,7 @@ final class AppModel: ObservableObject {
             )
         case .fiveX:
             let f = AppModel.zoomBoxFraction
-            let c = previewRotation.displayPoint(fromSensor: meteringCenter)
+            let c = previewOrientation.displayPoint(fromSensor: meteringCenter)
             return CGRect(x: c.x - f / 2, y: c.y - f / 2, width: f, height: f)
         }
     }
@@ -260,7 +263,7 @@ final class AppModel: ObservableObject {
         case .fiveX:
             let f = AppModel.zoomBoxFraction
             let lo = f / 2, hi = 1 - f / 2
-            let sensor = previewRotation.sensorPoint(fromDisplay: center)
+            let sensor = previewOrientation.sensorPoint(fromDisplay: center)
             meteringCenter = CGPoint(
                 x: min(max(sensor.x, lo), hi),
                 y: min(max(sensor.y, lo), hi)
@@ -296,7 +299,7 @@ final class AppModel: ObservableObject {
             // let the camera catch up on its own schedule.
             let f = AppModel.zoomBoxFraction
             let lo = f / 2, hi = 1 - f / 2
-            let sensor = previewRotation.sensorPoint(fromDisplay: next)
+            let sensor = previewOrientation.sensorPoint(fromDisplay: next)
             meteringCenter = CGPoint(
                 x: min(max(sensor.x, lo), hi),
                 y: min(max(sensor.y, lo), hi)
@@ -352,6 +355,22 @@ final class AppModel: ObservableObject {
     }
 
     /// The whole rotation applied to the preview, normalized to 0..<360.
+    /// The turn and, emulsion-down, the mirror. Every display↔sensor mapping
+    /// and the frame itself go through this.
+    var previewOrientation: PreviewOrientation {
+        PreviewOrientation(rotation: previewRotation, mirrored: !AppSettings.shared.emulsionUp)
+    }
+
+    /// Emulsion up (the rule) or down. Switching mirrors the preview, so a
+    /// crop box on screen is reflected with it to stay on the same film.
+    func setEmulsionUp(_ up: Bool) {
+        guard up != AppSettings.shared.emulsionUp else { return }
+        cropRect = cropRect.map(PreviewOrientation.mirrorDisplayRect)
+        AppSettings.shared.emulsionUp = up
+        objectWillChange.send()
+        appLog.info("emulsion \(up ? "up" : "down", privacy: .public)")
+    }
+
     var totalRotationDegrees: Double {
         let raw = Double(previewRotation.rawValue) + previewFineRotation
         return raw.truncatingRemainder(dividingBy: 360) + (raw < 0 ? 360 : 0)
@@ -436,6 +455,12 @@ final class AppModel: ObservableObject {
 
     @Published private(set) var appliedCrop: AppliedCrop?
 
+    /// How the crop box came to be, for the archive: detected by auto-crop,
+    /// drawn or adjusted by hand, or built from the expected format (what the
+    /// last believed detection taught us) when detection found nothing.
+    enum CropSource: String { case auto, manual, previous }
+    @Published private(set) var cropSource: CropSource = .manual
+
     /// Fix the crop and hand the interface back.
     func applyCrop() {
         guard let rect = cropRect else { return }
@@ -453,6 +478,7 @@ final class AppModel: ObservableObject {
 
     /// Go back to adjusting an applied crop.
     func editCrop() {
+        cropSource = .manual
         guard cropRect != nil else { return }
         isCropEditing = true
     }
@@ -485,7 +511,7 @@ final class AppModel: ObservableObject {
         // Detect on the frame as displayed, not as captured: the crop is stored
         // in display space, and rotating the *result* instead would turn an
         // upright rectangle into a tilted one that no longer is one.
-        let turned = previewRotation.rotate(raw) ?? raw
+        let turned = previewOrientation.apply(raw) ?? raw
         let cg = FineRotation.rotate(turned, byDegrees: previewFineRotation) ?? turned
         guard let plan = CropPlanner.plan(in: cg, expecting: expectedFilmSize) else {
             showNotice("No negative found — set the crop by hand, or check the framing")
@@ -500,6 +526,7 @@ final class AppModel: ObservableObject {
         // Learn from a detection we believed, so the next negative has a prior.
         // Only from `.detected`: the fallback's shape came *from* the
         // expectation, so treating it as evidence would be circular.
+        cropSource = plan.route == .detected ? .auto : .previous
         if plan.route == .detected, let size = cropReferenceSize {
             let px = CGSize(width: plan.rect.width * size.width,
                             height: plan.rect.height * size.height)
@@ -520,6 +547,96 @@ final class AppModel: ObservableObject {
         isCropEditing = false
         appliedCrop = nil
         showNotice("Crop cleared")
+    }
+
+    // MARK: - Capture attributes
+
+    /// What the operator did to this frame, for the archive, which applies
+    /// it when building derivatives. See the API's "Capture attributes":
+    /// straighten (about the box's centre) → crop (file pixels) → flop →
+    /// rotate.
+    ///
+    /// One correction is needed on the way out. On screen the picture is
+    /// straightened about the *frame's* centre and the box drawn square over
+    /// it; the archive straightens about the *box's* centre. Same angle,
+    /// different pivot, so the box's centre lands somewhere else in the
+    /// unstraightened file — the box is moved there, at the same size. For a
+    /// box far from the middle at a third of a degree that is a dozen pixels,
+    /// which is a visible sliver of rebate if ignored.
+    func captureAttributes(files: [URL]) -> CaptureAttributes {
+        var crop: CaptureAttributes.Crop? = nil
+        if let rect = cropRect {
+            let size = cropReferenceSize ?? CGSize(width: 1, height: 1)
+            // Undo the quarter turn only; the fine angle is sent separately.
+            let box = previewOrientation.sensorRect(fromDisplay: rect)
+            // Straightening was applied on screen; under the mirror a clockwise
+            // turn there is a counter-clockwise turn of the file. The archive
+            // straightens the file, so it gets the file's angle.
+            let straighten = previewOrientation.mirrored ? -previewFineRotation : previewFineRotation
+            // Where the box's centre lies before straightening: rotate it the
+            // other way about the frame's centre, in pixels so the aspect
+            // ratio is honoured (y down, clockwise positive).
+            let theta = straighten * .pi / 180
+            let cx = (box.midX - 0.5) * size.width
+            let cy = (box.midY - 0.5) * size.height
+            let ux = cx * cos(theta) + cy * sin(theta)
+            let uy = -cx * sin(theta) + cy * cos(theta)
+            let centre = CGPoint(x: ux / size.width + 0.5, y: uy / size.height + 0.5)
+            var n = CGRect(x: centre.x - box.width / 2, y: centre.y - box.height / 2,
+                           width: box.width, height: box.height)
+            // Inset so the straightened cut can't reach the wedge of nothing the
+            // turn leaves at the picture's edge: ceil(halfwidth × sin θ), all sides.
+            let inset = CaptureAttributes.straighteningInset(halfWidth: Double(n.width * size.width) / 2,
+                                                             degrees: straighten)
+            if inset > 0 {
+                n = n.insetBy(dx: CGFloat(inset) / size.width, dy: CGFloat(inset) / size.height)
+            }
+            func r4(_ v: CGFloat) -> Double { (Double(v) * 10_000).rounded() / 10_000 }
+            func px(_ v: CGFloat, _ span: CGFloat) -> Int { Int((v * span).rounded()) }
+            crop = CaptureAttributes.Crop(
+                x: px(n.minX, size.width), y: px(n.minY, size.height),
+                width: px(n.width, size.width), height: px(n.height, size.height),
+                straighten: (straighten * 100).rounded() / 100,
+                normalized: .init(x: r4(n.minX), y: r4(n.minY), width: r4(n.width), height: r4(n.height)),
+                format: expectedFilmSize?.id,
+                source: cropSource.rawValue
+            )
+        }
+
+        var whiteBalance: CaptureAttributes.WhiteBalance? = nil
+        let gains = previewAdjustments.whiteBalance.map {
+            CaptureAttributes.Gains(red: ($0.red * 1000).rounded() / 1000,
+                                    green: ($0.green * 1000).rounded() / 1000,
+                                    blue: ($0.blue * 1000).rounded() / 1000)
+        }
+        if snapshot.whiteBalanceKelvin != nil || gains != nil {
+            let sampled = lastWhiteBalanceSample.flatMap { p -> CaptureAttributes.Point? in
+                guard let size = lastCaptureSize else { return nil }
+                return .init(x: Int((p.x * size.width).rounded()), y: Int((p.y * size.height).rounded()))
+            }
+            whiteBalance = .init(kelvin: snapshot.whiteBalanceKelvin, gains: gains, sampled: sampled)
+        }
+
+        // The camera block carries the values the body reports, as it reports
+        // them — read after the capture, so they are the ones the shot was
+        // made with — and the format is checked against the files produced.
+        func known(_ s: String) -> String? { (s.isEmpty || s == "—") ? nil : s }
+        let format = CaptureAttributes.imageFormat(interface: snapshot.imageFormat,
+                                                   fileExtensions: files.map(\.pathExtension))
+        let info = Bundle.main.infoDictionary
+        return CaptureAttributes(
+            rotate: previewRotation.rawValue,
+            flop: !AppSettings.shared.emulsionUp,
+            crop: crop,
+            whiteBalance: whiteBalance,
+            film: .init(monochrome: previewAdjustments.monochrome),
+            camera: .init(body: snapshot.cameraModel, lens: snapshot.lensName,
+                          iso: known(snapshot.iso), shutter: known(snapshot.shutter),
+                          aperture: known(snapshot.aperture), imageFormat: known(format)),
+            software: .init(name: "Film Tether",
+                            version: (info?["CFBundleShortVersionString"] as? String) ?? "dev",
+                            build: (info?["BuildStamp"] as? String) ?? "dev")
+        )
     }
 
     /// Pixel dimensions of an image file, from its metadata alone.
@@ -647,6 +764,10 @@ final class AppModel: ObservableObject {
     /// `WhiteBalanceEstimate`), so it lands close rather than exactly. Clicking
     /// the same spot again re-measures from wherever the body now is and closes
     /// the remaining gap — repeated clicks converge.
+    /// Where the film base was last clicked, normalized unrotated sensor
+    /// space, for the archive's record of the correction.
+    private var lastWhiteBalanceSample: CGPoint?
+
     func sampleWhiteBalance(atSensor point: CGPoint) {
         isPickingWhiteBalance = false
         guard let jpeg = lastUnadjustedFrame else {
@@ -668,6 +789,7 @@ final class AppModel: ObservableObject {
         // nothing and shows up on the very next frame.
         previewAdjustments.whiteBalance =
             WhiteBalanceEstimate.tintGains(red: s.red, green: s.green, blue: s.blue)
+        lastWhiteBalanceSample = point
 
         // The camera's share: a colour temperature. Needs the body's current
         // setting, because the estimate is a correction to it — without a known
@@ -748,7 +870,10 @@ final class AppModel: ObservableObject {
         // The box is stored in display space, so a quarter turn of the view
         // would otherwise leave it pointing at different film. Turning it the
         // same way keeps it on the negative it was put on.
-        cropRect = cropRect.map { PreviewRotation.cw90.displayRect(fromSensor: $0) }
+        // Under the mirror a clockwise turn of the film is a counter-clockwise
+        // one on screen, so the box turns the other way to follow it.
+        let turn: PreviewRotation = previewOrientation.mirrored ? .cw270 : .cw90
+        cropRect = cropRect.map { turn.displayRect(fromSensor: $0) }
         // The button is for getting the negative the right way up, so it lands
         // on an exact quarter turn — straightening is a separate adjustment and
         // carrying it through would mean the button never reaches 0/90/180/270.
@@ -758,7 +883,8 @@ final class AppModel: ObservableObject {
     }
 
     func rotatePreviewLeft() {
-        cropRect = cropRect.map { PreviewRotation.cw270.displayRect(fromSensor: $0) }
+        let turn: PreviewRotation = previewOrientation.mirrored ? .cw90 : .cw270
+        cropRect = cropRect.map { turn.displayRect(fromSensor: $0) }
         previewFineRotation = 0
         previewRotation = previewRotation.rotatedLeft
         appLog.info("preview rotation → \(self.previewRotation.rawValue, privacy: .public)°")
@@ -1161,7 +1287,7 @@ final class AppModel: ObservableObject {
         // above was positioned in sensor space, so turning the finished frame
         // keeps the box glued to the image content instead of sliding off it.
         let rotated = composed
-            .map { previewRotation.rotate($0) }
+            .map { previewOrientation.apply($0) }
             .map { FineRotation.rotate($0, byDegrees: previewFineRotation) }
 
         // Keep the newest *whole* frame for the navigator overview. Only frames
@@ -1286,8 +1412,6 @@ final class AppModel: ObservableObject {
         if let result = captureResult {
             self.lastCapture = result.path.lastPathComponent
             self.lastCaptureURL = result.path
-            // If a strip is hot, this frame belongs to its current number.
-            archive.captureCompleted(files: result.allPaths, primary: result.path)
             self.nextCaptureSequence = result.sequence + 1
             self.capturedFiles.append(contentsOf: result.allPaths)
             // Dimensions only — read from the file's metadata without decoding
@@ -1301,6 +1425,14 @@ final class AppModel: ObservableObject {
             // Pick up any side-effect property changes the camera made during
             // capture (focusmode auto-restored, AE state, etc).
             await refreshSnapshot()
+            // If a row is hot, this frame belongs to its current number, and
+            // goes with what was done to it. After the refresh, so the camera
+            // values are what the body reports now — the snapshot is not
+            // refreshed during live view, and a format changed on the body
+            // would otherwise be reported as it was at connect. After the
+            // size is known, so the crop is quoted in this file's pixels.
+            archive.captureCompleted(files: result.allPaths, primary: result.path,
+                                     attributes: captureAttributes(files: result.allPaths))
         } else if let err = captureError as? CameraError {
             appLog.error("captureNow CameraError: \(err.localizedDescription, privacy: .public)")
             self.ui = .error(message: err.localizedDescription, hint: nil)
@@ -1430,7 +1562,12 @@ final class AppModel: ObservableObject {
     private func applyEvent(_ evt: CameraEvents.Event) async {
         switch evt {
         case .propertyChanged(let name, let value, _):
-            guard let name, let value else { return }
+            guard let name, let value else {
+                // The body said something changed and the driver couldn't say
+                // what. Read the lot rather than let the interface drift.
+                Task { await self.refreshSnapshot() }
+                return
+            }
             switch name {
             case "shutterspeed":
                 let isAutoish = value.lowercased() == "auto" || value.isEmpty
@@ -1454,11 +1591,45 @@ final class AppModel: ObservableObject {
                 var s = self.snapshot
                 s.aperture = value
                 self.snapshot = s
-            // focusmode events are useful but PropertySnapshot doesn't surface
-            // focusMode in the UI today, capture path just writes Manual/
-            // One Shot directly. Skip rather than carry dead state.
+            // Every other setting the body announces is applied too. The
+            // toolbar is the operator's only view of the camera while live
+            // view is up — there is no periodic refresh then, to keep the USB
+            // pipe free for frames — so a change made on the body's own dials
+            // has to arrive this way or the interface lies. It did: the image
+            // format changed on the body stayed wrong until the next capture,
+            // and went up to the archive wrong with it.
+            case "imageformat":
+                var s = self.snapshot
+                s.imageFormat = value
+                self.snapshot = s
+            case "whitebalance":
+                var s = self.snapshot
+                s.whiteBalance = value
+                self.snapshot = s
+            case "colortemperature":
+                if let k = Int(value) {
+                    var s = self.snapshot
+                    s.whiteBalanceKelvin = k
+                    self.snapshot = s
+                }
+            case "meteringmode":
+                var s = self.snapshot
+                s.meteringMode = value
+                self.snapshot = s
+            case "autoexposuremode", "expprogram":
+                var s = self.snapshot
+                s.mode = value
+                self.snapshot = s
+            case "focusmode", "lensname", "cameramodel":
+                // Not shown live, but read on the next refresh; a lens change
+                // is worth one now so the archive gets the right lens.
+                if name == "lensname" { Task { await self.refreshSnapshot() } }
             default:
-                break
+                // A setting we don't map by name. Rather than assume it's
+                // one that doesn't matter, read the lot — one config read,
+                // only when the body says something changed.
+                hotkeyLog.info("property event \(name, privacy: .public) = \(value, privacy: .public): full refresh")
+                Task { await self.refreshSnapshot() }
             }
         case .fileAdded, .captureComplete, .timeout, .unknown:
             // Capture path drains its own FILE_ADDED inside CameraCapture;
@@ -1709,6 +1880,8 @@ final class AppModel: ObservableObject {
         if let v = snap.imageFormat  { s.imageFormat = v }
         if let v = snap.battery      { s.battery = v }
         if let v = snap.meteringMode { s.meteringMode = v }
+        if let v = snap.cameraModel  { s.cameraModel = v }
+        if let v = snap.lensName     { s.lensName = v }
         if let camTime = snap.cameraDateTime {
             s.cameraDateTime = camTime
             // Store the camera-vs-host *offset* rather than the raw timestamp:
@@ -1931,7 +2104,7 @@ final class AppModel: ObservableObject {
         case .left:  screenDelta = CGVector(dx: -step, dy: 0)
         case .right: screenDelta = CGVector(dx: step, dy: 0)
         }
-        let d = previewRotation.sensorDelta(fromDisplay: screenDelta)
+        let d = previewOrientation.sensorDelta(fromDisplay: screenDelta)
         var c = meteringCenter
         c.x = min(max(c.x + d.dx, lo), hi)
         c.y = min(max(c.y + d.dy, lo), hi)

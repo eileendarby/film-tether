@@ -45,7 +45,7 @@ struct LiveViewPane: View {
                 EyedropperLayer { display in
                     // Un-rotate so the sample comes from the pixel that
                     // was actually under the crosshair.
-                    let s = model.previewRotation.sensorPoint(fromDisplay: display)
+                    let s = model.previewOrientation.sensorPoint(fromDisplay: display)
                     model.sampleWhiteBalance(atSensor: s)
                 }
                 .aspectRatio(model.previewAspectRatio, contentMode: .fit)
@@ -76,7 +76,7 @@ struct LiveViewPane: View {
                                         x: value.location.x / max(geo.size.width, 1),
                                         y: value.location.y / max(geo.size.height, 1)
                                     )
-                                    let s = model.previewRotation.sensorPoint(fromDisplay: display)
+                                    let s = model.previewOrientation.sensorPoint(fromDisplay: display)
                                     // Box centered on the click/drag point, clamped so it
                                     // stays fully in frame and can reach every edge.
                                     let nx = min(max(s.x, f/2), 1 - f/2)

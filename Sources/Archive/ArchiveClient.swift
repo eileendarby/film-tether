@@ -222,13 +222,15 @@ public actor ArchiveClient {
         var chunkSize: Int
         var sha256: String
         var chunks: [String]
+        var attributes: CaptureAttributes?
     }
 
     /// Register a transfer and get the block list back. Nothing has moved yet.
-    public func createUpload(assetID: String, filename: String, file: ChunkedFile) async throws -> ArchiveUpload {
+    public func createUpload(assetID: String, filename: String, file: ChunkedFile,
+                             attributes: CaptureAttributes? = nil) async throws -> ArchiveUpload {
         try await send("POST", "uploads", body: CreateUploadRequest(
             assetid: assetID, filename: filename, bytes: file.bytes, chunkSize: file.chunkSize,
-            sha256: file.sha256, chunks: file.chunks
+            sha256: file.sha256, chunks: file.chunks, attributes: attributes
         ))
     }
 

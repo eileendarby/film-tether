@@ -27,8 +27,11 @@ public struct UploadJob: Codable, Identifiable, Equatable, Sendable {
     public var created: Date
     public var completed: Date?
     public var renderError: String?
+    /// What the operator did to the frame, sent with the scan. Optional so
+    /// a queue saved before this existed still loads.
+    public var attributes: CaptureAttributes?
 
-    public init(assetID: String, fileURL: URL, show: String, label: String) {
+    public init(assetID: String, fileURL: URL, show: String, label: String, attributes: CaptureAttributes? = nil) {
         id = UUID()
         self.assetID = assetID
         self.fileURL = fileURL
@@ -36,6 +39,7 @@ public struct UploadJob: Codable, Identifiable, Equatable, Sendable {
         self.label = label
         state = .queued
         created = Date()
+        self.attributes = attributes
     }
 
     /// Still to do, or in progress.
@@ -240,7 +244,8 @@ public actor UploadEngine {
             upload = u
         }
         if upload == nil {
-            upload = try await client.createUpload(assetID: job.assetID, filename: job.fileURL.lastPathComponent, file: file)
+            upload = try await client.createUpload(assetID: job.assetID, filename: job.fileURL.lastPathComponent,
+                                                   file: file, attributes: job.attributes)
         }
         guard var current = upload else { throw ArchiveError.badResponse }
         let total = current.chunks ?? file.chunkCount

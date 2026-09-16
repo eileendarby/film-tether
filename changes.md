@@ -2,6 +2,70 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-09-15 — The toolbar tells the truth about the body's dials
+
+A scan made with the body set to RAW went up with `image_format: "RAW + L"`,
+and the toolbar was showing the same. The body announces every setting
+change as a property event, and the event drain applied three of them —
+shutter, ISO, aperture — and dropped the rest. There is no periodic refresh
+during live view (deliberately: a config read costs USB time the frame
+stream needs), so a format changed on the body's own dial stayed wrong in
+the interface until the next capture, and went to the archive wrong with it.
+
+The drain now applies every event it can name — image format, white
+balance, colour temperature, metering mode, exposure mode — refreshes on a
+lens change, and for any name it doesn't know does a full refresh rather
+than assuming it doesn't matter. Two more changes on the payload side:
+
+- The hook now runs after the post-capture refresh, so the camera values are
+  what the body reports now.
+- The `camera` block carries the values as the body reports them — `100`,
+  `8`, `1/125` — read after the capture, and the image format is checked
+  against the files the capture produced: a RAW alone under a
+  label that promises a JPEG is reported as `RAW`, and the reverse as
+  `RAW + JPEG`. The files are what was scanned; they win.
+
+## 2026-09-14 — Capture attributes go with the scan
+
+The archive now takes what the operator did to a frame along with the scan
+(`POST /v1/uploads` with an `attributes` object) and applies it when it
+builds derivatives, so every thumbnail and gallery image is the photograph
+rather than the whole scan with its rebate. Each capture now sends:
+
+- `rotate` (0/90/180/270) and `flop` — from a new *Emulsion Up* checkbox in
+  the Scanning panel, ticked by default. Unticked, the live preview is
+  mirrored (after the quarter turn, before straightening) so the operator
+  sees the picture the right way round, every display↔sensor mapping — the
+  crop box, the metering box, the eyedropper — goes through the mirror too,
+  a crop box on screen is reflected when the setting changes so it stays on
+  the same film, and each scan is sent with `flop`. `PreviewOrientation` in
+  the Scan library carries the turn and the mirror together, with tests;
+- the crop box is inset on every side by ceil(halfwidth × sin θ) pixels
+  before it is sent when straightening is in force, so the straightened cut
+  can't reach the wedge of nothing the turn leaves at the picture's edge —
+  the archive copes with such a box, but the scanner shouldn't send one;
+- `crop`: the box in the file's own pixels and as fractions, `straighten`
+  (the fine angle), the film size, and how the box came to be (`auto`,
+  `manual`, `previous`);
+- `white_balance`: the Kelvin sent to the camera, the host-side R/G/B gains,
+  and where the film base was clicked, in file pixels;
+- `film.monochrome`, `camera` (body and lens read from the camera, plus
+  ISO, shutter, aperture and image format) and `software`.
+
+One correction on the way out: on screen the picture is straightened about
+the frame's centre and the box drawn square over it, while the archive
+straightens about the box's centre. Same angle, different pivot, so the
+box's centre is moved to where it lies in the unstraightened file. A dozen
+pixels for a box far from the middle at a third of a degree — a visible
+sliver of rebate if ignored.
+
+Attributes are checked before a transfer is registered and a refusal is a
+422 for the whole send, so anything the archive would refuse is put right
+here: an odd rotation becomes 0, straightening is held to ±45°, a box that
+runs a pixel off the edge is pulled back inside, and the crop's format is
+pinned to the row's. `CaptureAttributes` lives in the Archive library with
+tests for the wire shape (snake_case), the round trip, and the validation.
+
 ## 2026-09-14 — Space in a text field is a space
 
 The capture hotkey (Space by default) was taken by the app-wide key monitor

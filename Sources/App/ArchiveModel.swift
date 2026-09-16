@@ -584,13 +584,18 @@ final class ArchiveModel: ObservableObject {
     /// A capture has been written. If a row is hot, it belongs to the
     /// current frame: the RAW goes to its `00` version and moves the run on;
     /// a JPEG alongside it goes to a `01` version, registered on the spot.
-    func captureCompleted(files: [URL], primary: URL) {
+    func captureCompleted(files: [URL], primary: URL, attributes: CaptureAttributes) {
         guard var r = run, let label = r.currentLabel, let assetID = r.currentAssetID else { return }
         r.markScanned()
         run = r
-        enqueue(UploadJob(assetID: assetID, fileURL: primary, show: r.show, label: label))
+        // The archive refuses a crop whose format disagrees with the asset's;
+        // the row's format is the asset's, so it wins over the crop's guess.
+        var attrs = attributes
+        attrs.crop?.format = r.format
+        let sent = attrs.validated()
+        enqueue(UploadJob(assetID: assetID, fileURL: primary, show: r.show, label: label, attributes: sent))
         for companion in files where companion != primary {
-            Task { await sendSecondary(companion, label: label, run: r) }
+            Task { await sendSecondary(companion, label: label, run: r, attributes: sent) }
         }
         persistState()
         if r.isFinished {
@@ -610,7 +615,7 @@ final class ArchiveModel: ObservableObject {
     /// The JPEG of a RAW+JPEG capture is version `01` of the same asset. The
     /// version is registered the first time a label produces one; a redo
     /// finds it remembered on the run, or named in the server's 409.
-    private func sendSecondary(_ file: URL, label: String, run r: ScanRun) async {
+    private func sendSecondary(_ file: URL, label: String, run r: ScanRun, attributes: CaptureAttributes?) async {
         guard let client else { return }
         var id = r.secondaryAssetIDs[label]
         if id == nil {
@@ -636,7 +641,7 @@ final class ArchiveModel: ObservableObject {
             }
         }
         guard let id else { return }
-        enqueue(UploadJob(assetID: id, fileURL: file, show: r.show, label: label))
+        enqueue(UploadJob(assetID: id, fileURL: file, show: r.show, label: label, attributes: attributes))
     }
 
     // MARK: - Queue

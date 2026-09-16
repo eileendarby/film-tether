@@ -39,6 +39,7 @@ final class AppSettings: ObservableObject {
         static let previewFineRotation = "previewFineRotation"
         static let showArchiveTray = "showArchiveTray"
         static let archiveTrayWidth = "archiveTrayWidth"
+        static let emulsionUp = "emulsionUp"
     }
 
     // MARK: - Defaults
@@ -272,6 +273,15 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(archiveTrayWidth, forKey: Key.archiveTrayWidth) }
     }
 
+    /// The film is on the light table emulsion-up, toward the lens — the
+    /// rule, and the default. Off means emulsion-down: every capture is a
+    /// mirror image, the preview is mirrored back so the operator sees the
+    /// picture the right way round, and each scan is sent with `flop` so
+    /// the archive does the same.
+    @Published var emulsionUp: Bool {
+        didSet { defaults.set(emulsionUp, forKey: Key.emulsionUp) }
+    }
+
     /// Format the operator is currently working through.
     ///
     /// Stored as the catalogue's own numeric id, which is the website
@@ -369,6 +379,7 @@ final class AppSettings: ObservableObject {
         self.previewFineRotation = defaults.double(forKey: Key.previewFineRotation)
         self.showArchiveTray = defaults.object(forKey: Key.showArchiveTray) as? Bool ?? true
         self.archiveTrayWidth = defaults.object(forKey: Key.archiveTrayWidth) as? Double ?? 400
+        self.emulsionUp = defaults.object(forKey: Key.emulsionUp) as? Bool ?? true
         let storedSizeID = defaults.object(forKey: Key.expectedFilmSizeID) as? Int
         self.expectedFilmSize = storedSizeID.flatMap { id in
             FilmSize.seedCatalog.first { $0.id == id }

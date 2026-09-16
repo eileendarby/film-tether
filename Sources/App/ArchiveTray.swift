@@ -13,6 +13,8 @@ import Scan
 /// those two replace each other, and never move above the inventory.
 struct ArchiveTray: View {
     @ObservedObject var archive: ArchiveModel
+    @ObservedObject private var settings = AppSettings.shared
+    @EnvironmentObject private var model: AppModel
     @FocusState private var searchFocused: Bool
 
     /// Narrow enough to keep a laptop usable with the tray open; the split
@@ -525,6 +527,9 @@ struct ArchiveTray: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .help("Frames of this row that already have a scan in the archive")
+                Toggle("Emulsion Up", isOn: Binding(get: { settings.emulsionUp }, set: { model.setEmulsionUp($0) }))
+                    .toggleStyle(.checkbox)
+                    .help("The film is lying emulsion-up, toward the lens — the rule. Untick for a strip that had to go emulsion-down: the preview is mirrored back so it reads correctly, and each scan is sent with flop so the archive does the same.")
                 if run.isFinished {
                     Text("Row finished")
                         .font(.title2.weight(.semibold))
