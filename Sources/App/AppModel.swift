@@ -528,8 +528,9 @@ final class AppModel: ObservableObject {
         // expectation, so treating it as evidence would be circular.
         cropSource = plan.route == .detected ? .auto : .previous
         if plan.route == .detected, let size = cropReferenceSize {
-            let px = CGSize(width: plan.rect.width * size.width,
-                            height: plan.rect.height * size.height)
+            let sensor = previewOrientation.sensorRect(fromDisplay: plan.rect)
+            let px = CGSize(width: sensor.width * size.width,
+                            height: sensor.height * size.height)
             let match = FilmSizeMatcher.bestMatch(forCropSize: px, in: FilmSize.seedCatalog)
             if !match.isUnknown { expectedFilmSize = match }
         }
@@ -599,7 +600,10 @@ final class AppModel: ObservableObject {
                 straighten: (straighten * 100).rounded() / 100,
                 normalized: .init(x: r4(n.minX), y: r4(n.minY), width: r4(n.width), height: r4(n.height)),
                 format: expectedFilmSize?.id,
-                source: cropSource.rawValue
+                source: cropSource.rawValue,
+                // What the numbers above are fractions of: the raster ImageIO
+                // decoded, which is the R5's nominal image, not its full readout.
+                reference: .init(width: Int(size.width.rounded()), height: Int(size.height.rounded()))
             )
         }
 
@@ -629,7 +633,10 @@ final class AppModel: ObservableObject {
             flop: !AppSettings.shared.emulsionUp,
             crop: crop,
             whiteBalance: whiteBalance,
-            film: .init(monochrome: previewAdjustments.monochrome),
+            // What the operator set the preview to says what the film is: the
+            // preview is inverted because this is a negative; it is shown in
+            // black and white because the film is.
+            film: .init(negative: previewAdjustments.invert, monochrome: previewAdjustments.monochrome),
             camera: .init(body: snapshot.cameraModel, lens: snapshot.lensName,
                           iso: known(snapshot.iso), shutter: known(snapshot.shutter),
                           aperture: known(snapshot.aperture), imageFormat: known(format)),
@@ -654,12 +661,17 @@ final class AppModel: ObservableObject {
         return CGSize(width: w, height: h)
     }
 
-    /// The crop in the reference image's pixels, for display.
+    /// The crop in the reference image's own pixels — the file as the camera
+    /// wrote it, before the preview's turn or mirror — which is the space the
+    /// archive is sent and what the footer should read. Multiplying the
+    /// display-space box by the file size, as this used to, quoted a turned
+    /// preview's box with its axes swapped.
     var cropPixelRect: CGRect? {
         guard let r = cropRect, let size = cropReferenceSize,
               size.width > 0, size.height > 0 else { return nil }
-        return CGRect(x: r.minX * size.width, y: r.minY * size.height,
-                      width: r.width * size.width, height: r.height * size.height)
+        let s = previewOrientation.sensorRect(fromDisplay: r)
+        return CGRect(x: s.minX * size.width, y: s.minY * size.height,
+                      width: s.width * size.width, height: s.height * size.height)
     }
 
     // MARK: - Preview adjustments (monochrome + click white balance)
@@ -1565,7 +1577,7 @@ final class AppModel: ObservableObject {
             guard let name, let value else {
                 // The body said something changed and the driver couldn't say
                 // what. Read the lot rather than let the interface drift.
-                Task { await self.refreshSnapshot() }
+                scheduleEventRefresh()
                 return
             }
             switch name {
@@ -1623,19 +1635,37 @@ final class AppModel: ObservableObject {
             case "focusmode", "lensname", "cameramodel":
                 // Not shown live, but read on the next refresh; a lens change
                 // is worth one now so the archive gets the right lens.
-                if name == "lensname" { Task { await self.refreshSnapshot() } }
+                if name == "lensname" { scheduleEventRefresh() }
             default:
                 // A setting we don't map by name. Rather than assume it's
                 // one that doesn't matter, read the lot — one config read,
                 // only when the body says something changed.
-                hotkeyLog.info("property event \(name, privacy: .public) = \(value, privacy: .public): full refresh")
-                Task { await self.refreshSnapshot() }
+                hotkeyLog.info("property event \(name, privacy: .public) = \(value, privacy: .public): refresh scheduled")
+                scheduleEventRefresh()
             }
         case .fileAdded, .captureComplete, .timeout, .unknown:
             // Capture path drains its own FILE_ADDED inside CameraCapture;
             // anything that arrives here was emitted while we weren't
             // actively capturing, safe to ignore.
             break
+        }
+    }
+
+    /// One refresh for a burst of property events, never more than one in
+    /// flight, and no more often than every few seconds. The body chatters
+    /// during live view — focus, battery, metering — and a config read per
+    /// event was enough to starve the frame stream and leave live view unable
+    /// to start (-110, I/O in progress). The interface still follows a dial
+    /// change; it just does so a moment later, in one read.
+    private var eventRefreshTask: Task<Void, Never>?
+
+    private func scheduleEventRefresh() {
+        guard eventRefreshTask == nil else { return }
+        eventRefreshTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard let self, !Task.isCancelled else { return }
+            await self.refreshSnapshot()
+            self.eventRefreshTask = nil
         }
     }
 

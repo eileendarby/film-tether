@@ -2,6 +2,46 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-09-15 — The film block says negative or positive
+
+`film` now carries `negative` alongside `monochrome`: true when the preview
+is inverted, which is exactly when the operator is looking at a negative;
+false for a positive — a slide, a print, a contact sheet. The archive needs
+both to build the derivatives the right way round and in the right colour.
+
+## 2026-09-15 — The crop says what raster it was measured against
+
+A derivative came back with white above the picture and black to its right,
+from a crop that cut the CR3 exactly right here. The archive decodes the R5
+file to its full 8480×5650 sensor readout, masked border included; ImageIO,
+Canon's software and libraw's default all deliver the nominal 8192×5464
+image, which sits at an offset inside that. The fractions were of the
+nominal image and were applied to the readout.
+
+`crop` now carries `reference: { width, height }` — the raster the box and
+the fractions are relative to — so the server can check its decode against
+it and decode to the same raster, or map through the sensor margins, rather
+than apply fractions to whatever it happened to get.
+
+## 2026-09-15 — The footer's crop numbers are the file's
+
+With the preview turned 90°, the footer read the crop box in display space
+multiplied by the file size — axes swapped, so a box that was sent (rightly)
+as `1562,29 → 7238,5448` read `38,1042 → 8171,4828`. The footer, the
+applied-crop notice and the film-size check after auto-crop now all go
+through the same un-turning as the payload, so what the footer says is
+what the archive gets.
+
+## 2026-09-15 — One refresh per burst of camera events
+
+The previous change refreshed the settings on every property event the body
+sent that it could not name. In live view the body sends plenty — focus,
+battery, metering chatter — and a config read per event starved the frame
+stream and left live view unable to start: "libgphoto2 error -110: I/O in
+progress". Event-driven refreshes are now coalesced: one for a burst, never
+more than one in flight, at most every three seconds. A dial change still
+reaches the toolbar; it just arrives a moment later, in one read.
+
 ## 2026-09-15 — The toolbar tells the truth about the body's dials
 
 A scan made with the body set to RAW went up with `image_format: "RAW + L"`,

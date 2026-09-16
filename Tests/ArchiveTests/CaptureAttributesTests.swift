@@ -7,10 +7,10 @@ final class CaptureAttributesTests: XCTestCase {
             rotate: 90, flop: true,
             crop: .init(x: 1364, y: 0, width: 5464, height: 5464, straighten: -0.35,
                         normalized: .init(x: 0.1665, y: 0, width: 0.667, height: 1),
-                        format: 2, source: "auto"),
+                        format: 2, source: "auto", reference: .init(width: 8192, height: 5464)),
             whiteBalance: .init(kelvin: 5200, gains: .init(red: 1, green: 0.912, blue: 1.087),
                                 sampled: .init(x: 210, y: 4980)),
-            film: .init(monochrome: false),
+            film: .init(negative: true, monochrome: false),
             camera: .init(body: "Canon EOS R5", lens: nil, iso: "100", shutter: "1/125", aperture: "8",
                           imageFormat: "RAW + L"),
             software: .init(name: "Film Tether", version: "0.3.0", build: "c6e3ca6")
@@ -30,10 +30,12 @@ final class CaptureAttributesTests: XCTestCase {
         XCTAssertEqual(crop["straighten"] as? Double, -0.35)
         XCTAssertEqual((crop["normalized"] as? [String: Any])?["width"] as? Double, 0.667)
         XCTAssertEqual(crop["format"] as? Int, 2)
+        XCTAssertEqual((crop["reference"] as? [String: Any])?["width"] as? Int, 8192, "the raster the box was measured against")
         let wb = try XCTUnwrap(o["white_balance"] as? [String: Any], "snake_case on the wire")
         XCTAssertEqual((wb["gains"] as? [String: Any])?["green"] as? Double, 0.912)
         XCTAssertEqual((wb["sampled"] as? [String: Any])?["y"] as? Int, 4980)
         XCTAssertEqual((o["film"] as? [String: Any])?["monochrome"] as? Bool, false)
+        XCTAssertEqual((o["film"] as? [String: Any])?["negative"] as? Bool, true)
         let camera = try XCTUnwrap(o["camera"] as? [String: Any])
         XCTAssertEqual(camera["image_format"] as? String, "RAW + L")
         XCTAssertNil(camera["lens"] ?? nil, "a nil is omitted, not sent as null")

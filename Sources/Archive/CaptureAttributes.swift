@@ -21,9 +21,23 @@ public struct CaptureAttributes: Codable, Equatable, Sendable {
         }
     }
 
+    /// The raster a crop was measured against. "The file's own pixels" is
+    /// not one thing for a RAW: ImageIO, Canon's software and libraw's
+    /// default all deliver the R5's nominal 8192×5464, while a decoder that
+    /// skips the crop hands over the full 8480×5650 sensor readout, masked
+    /// border included — and the nominal image sits at an offset inside it,
+    /// so fractions of one are not fractions of the other. This says which.
+    public struct Reference: Codable, Equatable, Sendable {
+        public var width: Int
+        public var height: Int
+        public init(width: Int, height: Int) { self.width = width; self.height = height }
+    }
+
     public struct Crop: Codable, Equatable, Sendable {
         /// Always "file": the stored file's own pixels, unrotated, y-down.
         public var space: String
+        /// The decoded raster the box and the fractions are relative to.
+        public var reference: Reference?
         public var x: Int
         public var y: Int
         public var width: Int
@@ -39,8 +53,9 @@ public struct CaptureAttributes: Codable, Equatable, Sendable {
         public var source: String
 
         public init(x: Int, y: Int, width: Int, height: Int, straighten: Double,
-                    normalized: Normalized, format: Int?, source: String) {
+                    normalized: Normalized, format: Int?, source: String, reference: Reference? = nil) {
             space = "file"
+            self.reference = reference
             self.x = x; self.y = y; self.width = width; self.height = height
             self.straighten = straighten
             self.normalized = normalized
@@ -78,8 +93,15 @@ public struct CaptureAttributes: Codable, Equatable, Sendable {
     }
 
     public struct Film: Codable, Equatable, Sendable {
+        /// A negative — the preview was inverted to see the positive. False
+        /// for a positive: a slide, a print, a contact sheet.
+        public var negative: Bool
+        /// Black and white, so the derivatives are made as such.
         public var monochrome: Bool
-        public init(monochrome: Bool) { self.monochrome = monochrome }
+        public init(negative: Bool, monochrome: Bool) {
+            self.negative = negative
+            self.monochrome = monochrome
+        }
     }
 
     public struct Camera: Codable, Equatable, Sendable {
