@@ -2,6 +2,63 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-09-15 — Live view starts itself
+
+When a camera connects, live view is started without being asked, after the
+clock sync so the two writes don't race for the USB pipe. If it fails the
+Live button is there to try again.
+
+## 2026-09-15 — Toolbar labels return one button at a time
+
+The bar stayed icons-only however wide the window. Two causes. Its
+`ViewThatFits` sits beside a `Spacer` in an `HStack`, and a stack proposes
+width to its children by dividing the room among them, so the bar was asked
+whether it fitted in half the width; it now has layout priority and is
+offered the whole width. And the labelled row is over 2000 pt, which no
+laptop screen has beside the tray, so it never fitted and the bar fell
+straight to icons.
+
+There is no longer one labelled layout and one icon layout. The row is
+tried with every toggle labelled, then one fewer, and so on down to icons
+only, and the widest that fits is used — so labels come back one button at
+a time, left to right, as the window widens, on a single row. The
+manual-focus stepper unfolds from its menu after the last label.
+
+## 2026-09-15 — The archive as the destination
+
+Signed in, the status bar's *Destination* is the Archive API address, with
+the name the next capture will be filed under when a row is hot; clicking it
+opens the tray. While the archive is the destination — signed in, a row hot
+— captures are written to a cache folder (`~/Library/Caches/Film Tether/
+Uploads`) rather than the capture folder, and each file is removed once its
+send is filed, its thumbnail having been made first if the Scanned list
+still needs one. Files in the operator's own folder are never touched.
+
+## 2026-09-15 — Control over overwrites: versions on the hot row
+
+In the Scanning panel the name the next capture will be filed under turns
+**red** when the archive already holds a scan under it — sending would
+overwrite — and − / + beside it step the version number (00, 01, 02…) until
+it isn't. Capture itself asks before overwriting: when the name is taken, a
+sheet offers Cancel (the default, so the capture key can't answer it), New
+Version (steps past the taken name and captures) or Overwrite. On an
+overwrite the picture held for that asset is dropped, and once the archive
+has rendered the replacement it is fetched past the day-long cache the
+derivatives are served with, so the Scanned list shows the new scan rather
+than the old. The chosen
+version is sticky across frames; the RAW goes to it and
+a JPEG alongside to the version after. The name shown is made from the
+version-00 id for display and the check only; the id that is sent always
+comes from the server (registered at that version, or named in its 409) and
+is remembered on the row. The overwrite check reads every version of the
+show's assets; the inventory colours still count canonical versions only.
+
+## 2026-09-15 — The status bar names the camera
+
+After the connection badge, the body's own name as it reports it — "Canon
+EOS R5m2" — with the lens in the tooltip. A day spent calling the camera an
+R5 when the file and the body both said R5 Mark II is the reason.
+
 ## 2026-09-15 — The film block says negative or positive
 
 `film` now carries `negative` alongside `monochrome`: true when the preview

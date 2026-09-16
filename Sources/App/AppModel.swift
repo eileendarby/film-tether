@@ -1126,8 +1126,13 @@ final class AppModel: ObservableObject {
             // is the fix for the EXIF DateTimeOriginal drift on bodies whose
             // internal TZ setting doesn't match the host (see
             // CameraProperties.syncDateTimeToHostLocal for the full story).
-            if AppSettings.shared.autoSyncClockOnConnect {
-                Task { [weak self] in await self?.syncCameraClockLocal() }
+            // Then live view, without being asked: a connected camera on a copy
+            // stand has one job. After the clock sync, so the two writes don't
+            // race for the pipe; a failure leaves the Live button to try again.
+            Task { [weak self] in
+                guard let self else { return }
+                if AppSettings.shared.autoSyncClockOnConnect { await self.syncCameraClockLocal() }
+                await self.startLiveView()
             }
         case .error(let msg):
             self.ui = .error(message: msg, hint: hintForMessage(msg))
@@ -1381,11 +1386,35 @@ final class AppModel: ObservableObject {
 
     func captureNow() async {
         appLog.info("captureNow() called")
+        // Never overwrite a scan the archive holds without asking. Cancel is
+        // the default so the capture key itself — Space, Return — can't
+        // answer yes; "New Version" steps past the taken name and goes on.
+        if let run = archive.run, !run.isFinished, archive.targetExists(run), let name = run.currentDisplayID {
+            let alert = NSAlert()
+            alert.messageText = "Overwrite \(name)?"
+            alert.informativeText = "The archive already holds a scan under this name. Sending this capture would replace it."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "New Version")
+            alert.addButton(withTitle: "Overwrite")
+            switch alert.runModal() {
+            case .alertSecondButtonReturn:
+                archive.stepVersion(1)
+            case .alertThirdButtonReturn:
+                break
+            default:
+                appLog.info("captureNow: cancelled, \(name, privacy: .public) is taken")
+                return
+            }
+        }
         guard let cap = capture else {
             appLog.error("captureNow: capture nil, connection not ready?")
             return
         }
-        let folder = AppSettings.shared.captureFolder
+        // The archive, when it is the destination, takes the file from a cache
+        // folder and clears it once the send is filed; otherwise the
+        // operator's own folder, kept.
+        let folder = archive.captureDestination ?? AppSettings.shared.captureFolder
         let pattern = AppSettings.shared.filenamePattern
         appLog.info("captureNow → \(folder.path, privacy: .public)/\(pattern, privacy: .public)")
 

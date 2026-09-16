@@ -73,12 +73,19 @@ final class ArchiveModel: ObservableObject {
     /// then "roll|label". Read from the assets' image block, which the
     /// archive fills in when a scan arrives.
     @Published private(set) var scannedFrames: [String: Set<String>] = [:]
+    /// Every assetid, at any version, that has a scan filed — for telling an
+    /// operator that the name the next capture would be filed under is taken.
+    @Published private(set) var scannedAssetIDs: Set<String> = []
     private var scanStatusTask: Task<Void, Never>?
     private var lastDoneCount = 0
     /// Pictures of the hot row's frames, by the RAW's assetid.
     @Published private(set) var thumbnails: [String: Thumbnail] = [:]
     private var thumbnailWork: Set<String> = []
     private var archiveTried: [String: Date] = [:]
+    /// Assets whose scan this session replaced: their derivatives are stale
+    /// until the archive renders again, and must then be fetched past the
+    /// cache.
+    private var overwritten: Set<String> = []
     @Published var formType = "N"
     @Published var formFormatID: Int
     @Published var formRoll = ""
@@ -105,6 +112,25 @@ final class ArchiveModel: ObservableObject {
     private var persistedShowID: String?
 
     var isSignedIn: Bool { auth == .signedIn }
+
+    /// Where captures go while the archive is the destination — signed in,
+    /// with a row hot: a cache folder, cleared file by file as each send is
+    /// filed. Nil otherwise, and captures go to the operator's own folder.
+    var captureDestination: URL? {
+        guard isSignedIn, let run, !run.isFinished else { return nil }
+        return Self.uploadCache
+    }
+
+    /// What the footer shows as the destination when the archive is it.
+    var destinationLabel: String? {
+        isSignedIn ? baseURLText : nil
+    }
+
+    static var uploadCache: URL {
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return base.appendingPathComponent("Film Tether/Uploads", isDirectory: true)
+    }
 
     /// The film sizes the archive knows, by its own ids.
     var formats: [FilmSize] { FilmSize.seedCatalog.filter { !$0.isUnknown } }
@@ -360,11 +386,18 @@ final class ArchiveModel: ObservableObject {
     private func loadScanStatus() async {
         guard let client, let show = currentShow, let inv = inventory else { return }
         var result: [String: Set<String>] = [:]
+        var ids: Set<String> = []
         for type in inv.types where !type.ranges.isEmpty {
-            guard let assets = try? await client.allAssets(show: show.id, type: type.type) else { continue }
-            result[type.type] = Set(assets.filter(\.hasScan).map { Self.frameKey(roll: $0.roll, label: $0.number) })
+            guard let assets = try? await client.allAssets(show: show.id, type: type.type, allVersions: true) else { continue }
+            let filed = assets.filter(\.hasScan)
+            ids.formUnion(filed.map(\.assetid))
+            // The inventory colours are about the photographs, so canonical
+            // versions only; the overwrite check is about every name.
+            result[type.type] = Set(filed.filter { $0.canonical ?? ($0.version == "00") }
+                                          .map { Self.frameKey(roll: $0.roll, label: $0.number) })
         }
         scannedFrames = result
+        scannedAssetIDs = ids
     }
 
     private static func frameKey(roll: String?, label: String) -> String {
@@ -582,10 +615,13 @@ final class ArchiveModel: ObservableObject {
     }
 
     /// A capture has been written. If a row is hot, it belongs to the
-    /// current frame: the RAW goes to its `00` version and moves the run on;
-    /// a JPEG alongside it goes to a `01` version, registered on the spot.
+    /// current frame at the current version: the RAW goes there, a JPEG
+    /// alongside it to the version after. Version 0's id was handed out
+    /// when the row was registered; any other is asked of the server now
+    /// (registered, or named in its 409) and remembered on the row.
     func captureCompleted(files: [URL], primary: URL, attributes: CaptureAttributes) {
-        guard var r = run, let label = r.currentLabel, let assetID = r.currentAssetID else { return }
+        guard var r = run, let label = r.currentLabel, r.currentAssetID != nil else { return }
+        let version = r.currentVersion
         r.markScanned()
         run = r
         // The archive refuses a crop whose format disagrees with the asset's;
@@ -593,14 +629,76 @@ final class ArchiveModel: ObservableObject {
         var attrs = attributes
         attrs.crop?.format = r.format
         let sent = attrs.validated()
-        enqueue(UploadJob(assetID: assetID, fileURL: primary, show: r.show, label: label, attributes: sent))
-        for companion in files where companion != primary {
-            Task { await sendSecondary(companion, label: label, run: r, attributes: sent) }
+        let snapshot = r
+        Task {
+            if let id = await resolveAssetID(run: snapshot, label: label, version: version) {
+                forgetDerivative(of: id)
+                enqueue(UploadJob(assetID: id, fileURL: primary, show: snapshot.show, label: label, attributes: sent))
+            }
+            for companion in files where companion != primary {
+                if let id = await resolveAssetID(run: snapshot, label: label, version: version + 1) {
+                    forgetDerivative(of: id)
+                    enqueue(UploadJob(assetID: id, fileURL: companion, show: snapshot.show, label: label, attributes: sent))
+                }
+            }
         }
         persistState()
         if r.isFinished {
             flash("Row finished: \(r.scanned.count) scanned, \(r.skipped.count) skipped")
         }
+    }
+
+    /// The server's id for a frame at a version — never composed here.
+    private func resolveAssetID(run r: ScanRun, label: String, version: Int) async -> String? {
+        if let known = r.assetID(for: label, version: version) { return known }
+        guard let client else { return nil }
+        var id: String?
+        do {
+            let b = try await client.registerAsset(show: r.show, type: r.type, roll: r.roll,
+                                                   number: label, format: r.format, version: version)
+            id = b.assets.first?.assetid
+        } catch let e as ArchiveError {
+            if let existing = e.alreadyRegisteredAssetIDs?.first {
+                id = existing
+            } else {
+                report(e)
+                return nil
+            }
+        } catch {
+            report(error)
+            return nil
+        }
+        if let id, var current = run, current.show == r.show, current.range == r.range {
+            current.remember(assetID: id, for: label, version: version)
+            run = current
+            persistState()
+        }
+        return id
+    }
+
+    /// An overwrite is on its way to this asset: whatever picture we hold for
+    /// it is about to be wrong. Drop it, and remember to fetch the new one
+    /// past the cache once the archive has rendered it.
+    private func forgetDerivative(of assetID: String) {
+        guard scannedAssetIDs.contains(assetID) || thumbnails[assetID]?.source == .archive else { return }
+        thumbnails[assetID] = nil
+        archiveTried[assetID] = nil
+        overwritten.insert(assetID)
+    }
+
+    /// Step the version the next capture is filed as, to keep from
+    /// overwriting a scan the archive already holds.
+    func stepVersion(_ delta: Int) {
+        guard var r = run else { return }
+        r.stepVersion(delta)
+        run = r
+        persistState()
+    }
+
+    /// The archive already holds a scan under the name the next capture
+    /// would be filed as — sending would overwrite it.
+    func targetExists(_ run: ScanRun) -> Bool {
+        run.currentDisplayID.map { scannedAssetIDs.contains($0) } ?? false
     }
 
     private func enqueue(_ job: UploadJob) {
@@ -610,38 +708,6 @@ final class ArchiveModel: ObservableObject {
             pendingJobs.append(job)
             jobs.append(job)
         }
-    }
-
-    /// The JPEG of a RAW+JPEG capture is version `01` of the same asset. The
-    /// version is registered the first time a label produces one; a redo
-    /// finds it remembered on the run, or named in the server's 409.
-    private func sendSecondary(_ file: URL, label: String, run r: ScanRun, attributes: CaptureAttributes?) async {
-        guard let client else { return }
-        var id = r.secondaryAssetIDs[label]
-        if id == nil {
-            do {
-                let b = try await client.registerAsset(show: r.show, type: r.type, roll: r.roll,
-                                                       number: label, format: r.format, version: 1)
-                id = b.assets.first?.assetid
-            } catch let e as ArchiveError {
-                if let existing = e.alreadyRegisteredAssetIDs?.first {
-                    id = existing
-                } else {
-                    report(e)
-                    return
-                }
-            } catch {
-                report(error)
-                return
-            }
-            if let id, var current = run, current.show == r.show, current.range == r.range {
-                current.secondaryAssetIDs[label] = id
-                run = current
-                persistState()
-            }
-        }
-        guard let id else { return }
-        enqueue(UploadJob(assetID: id, fileURL: file, show: r.show, label: label, attributes: attributes))
     }
 
     // MARK: - Queue
@@ -662,7 +728,11 @@ final class ArchiveModel: ObservableObject {
         let newlyRendered = new.filter { j in
             j.state == .rendered && !jobs.contains { $0.id == j.id && $0.state == .rendered }
         }
+        let newlyFiled = new.filter { j in
+            j.isDone && !jobs.contains { $0.id == j.id && $0.isDone }
+        }
         jobs = new
+        for job in newlyFiled { removeCachedFile(of: job) }
         persistState()
         if !newlyRendered.isEmpty { upgradeThumbnails(for: newlyRendered) }
         // A send finished: the inventory colours are out of date. Ask again,
@@ -757,6 +827,24 @@ final class ArchiveModel: ObservableObject {
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             guard !Task.isCancelled else { return }
             self?.status = nil
+        }
+    }
+
+    /// A send has been filed: the local copy in the upload cache has done its
+    /// job. Its thumbnail is made first if the row still needs one, so the
+    /// Scanned list isn't left with a placeholder until the archive renders.
+    /// Files outside the cache — the operator's own folder — are never touched.
+    private func removeCachedFile(of job: UploadJob) {
+        let cache = Self.uploadCache.standardizedFileURL.path
+        let path = job.fileURL.standardizedFileURL.path
+        guard path.hasPrefix(cache + "/"), FileManager.default.fileExists(atPath: path) else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            if await self.thumbnails[job.assetID] == nil {
+                await self.loadThumbnail(assetID: job.assetID, show: job.show, tryArchive: false, localFile: job.fileURL)
+            }
+            try? FileManager.default.removeItem(at: job.fileURL)
+            archiveLog.info("removed cached \(job.fileURL.lastPathComponent, privacy: .public) after filing")
         }
     }
 
@@ -865,9 +953,11 @@ final class ArchiveModel: ObservableObject {
         defer { thumbnailWork.remove(assetID) }
         if tryArchive, let client, let name = ArchiveAsset.pathName(ofAssetID: assetID) {
             archiveTried[assetID] = Date()
-            if let data = try? await client.image(show: show, asset: name, kind: "thumbnail"),
+            let fresh = overwritten.contains(assetID)
+            if let data = try? await client.image(show: show, asset: name, kind: "thumbnail", fresh: fresh),
                let image = NSImage(data: data) {
                 thumbnails[assetID] = Thumbnail(image: image, source: .archive)
+                overwritten.remove(assetID)
                 return
             }
         }

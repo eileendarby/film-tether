@@ -36,6 +36,14 @@ public struct ScanRun: Codable, Equatable, Sendable {
     /// was off. Stepping passes over them. Optional only so a row saved
     /// before this existed still decodes.
     public var removed: [String]?
+    /// The version the next capture's RAW is filed as: 0 unless the
+    /// operator stepped it to keep from overwriting a scan the archive
+    /// already holds. Sticky across frames. A JPEG alongside goes to the
+    /// version after. Optional so an older saved row decodes.
+    public var version: Int?
+    /// label → version ("2") → assetid, as the server has handed them out.
+    /// Version 0 lives in `assetIDs`; this is every other one.
+    public var versionIDs: [String: [String: String]]?
     public var started: Date
 
     public init(show: String, showName: String? = nil, type: String, typeName: String? = nil,
@@ -59,6 +67,39 @@ public struct ScanRun: Codable, Equatable, Sendable {
     }
 
     public var removedLabels: [String] { removed ?? [] }
+
+    public var currentVersion: Int { version ?? 0 }
+
+    public mutating func stepVersion(_ delta: Int) {
+        version = max(0, min(99, currentVersion + delta))
+    }
+
+    /// An id the server handed out for a label at a version, if it has.
+    public func assetID(for label: String, version v: Int) -> String? {
+        if v == 0 { return assetID(for: label) }
+        return versionIDs?[NumberRange.normalize(label)]?[String(v)]
+    }
+
+    public mutating func remember(assetID id: String, for label: String, version v: Int) {
+        var m = versionIDs ?? [:]
+        m[NumberRange.normalize(label), default: [:]][String(v)] = id
+        versionIDs = m
+    }
+
+    /// The name a scan will be filed under at a version, **for display and
+    /// the overwrite check only** — the id that is sent always comes from
+    /// the server. Made from the version-0 id by swapping its last part:
+    /// `T00316_NA0012_00` at version 2 is `T00316_NA0012_02`.
+    public static func displayID(_ baseID: String, version v: Int) -> String? {
+        let parts = baseID.split(separator: "_")
+        guard parts.count == 3, v >= 0, v <= 99 else { return nil }
+        return "\(parts[0])_\(parts[1])_" + String(format: "%02d", v)
+    }
+
+    /// What the next capture will be filed as, at the current version.
+    public var currentDisplayID: String? {
+        currentAssetID.flatMap { Self.displayID($0, version: currentVersion) }
+    }
 
     public func isRemoved(_ label: String) -> Bool {
         removedLabels.contains(NumberRange.normalize(label))

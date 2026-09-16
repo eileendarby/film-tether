@@ -543,12 +543,29 @@ struct ArchiveTray: View {
                             .help("The frame the next capture will be filed under")
                         Spacer()
                     }
-                    if let id = run.currentAssetID {
-                        Text(id)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .help("The archive's asset id for that frame")
+                    if let id = run.currentDisplayID {
+                        // The name the next capture will be filed under. Red when
+                        // the archive already holds a scan under it — sending
+                        // would overwrite — and − / + step the version until it
+                        // isn't. That is the operator's control over overwrites.
+                        let taken = archive.targetExists(run)
+                        HStack(spacing: 6) {
+                            Text(id)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(taken ? Color.red : Color.secondary)
+                                .textSelection(.enabled)
+                                .help(taken
+                                      ? "The archive already holds a scan under this name: sending would overwrite it. Press + to file this scan as a new version instead."
+                                      : "The name the next capture will be filed under (version \(String(format: "%02d", run.currentVersion))). A JPEG alongside the RAW goes to the version after.")
+                            Button("−") { archive.stepVersion(-1) }
+                                .controlSize(.mini)
+                                .disabled(run.currentVersion == 0)
+                                .help("Previous version number")
+                            Button("+") { archive.stepVersion(1) }
+                                .controlSize(.mini)
+                                .disabled(run.currentVersion >= 99)
+                                .help("Next version number: file the scan as a new version rather than over an existing one")
+                        }
                     }
                 }
                 Text("\(run.scanned.count) scanned · \(run.skipped.count) skipped · \(run.remaining) to go")

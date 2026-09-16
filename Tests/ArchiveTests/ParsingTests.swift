@@ -218,6 +218,24 @@ final class ScanRunTests: XCTestCase {
         XCTAssertEqual(back.secondaryAssetIDs["1"], "T00316_NA0001_01")
     }
 
+    func testVersions() throws {
+        var r = makeRun()
+        XCTAssertEqual(r.currentVersion, 0)
+        XCTAssertEqual(r.currentDisplayID, "T00316_NA0001_00")
+        r.stepVersion(1); r.stepVersion(1)
+        XCTAssertEqual(r.currentVersion, 2)
+        XCTAssertEqual(r.currentDisplayID, "T00316_NA0001_02", "display only: the sent id comes from the server")
+        r.stepVersion(-5)
+        XCTAssertEqual(r.currentVersion, 0, "never below 0")
+        XCTAssertNil(r.assetID(for: "1", version: 2), "not until the server hands one out")
+        r.remember(assetID: "T00316_NA0001_02", for: "0001", version: 2)
+        XCTAssertEqual(r.assetID(for: "1", version: 2), "T00316_NA0001_02")
+        XCTAssertEqual(r.assetID(for: "1", version: 0), "T00316_NA0001_00")
+        let back = try JSONDecoder().decode(ScanRun.self, from: try JSONEncoder().encode(r))
+        XCTAssertEqual(back.assetID(for: "1", version: 2), "T00316_NA0001_02")
+        XCTAssertNil(ScanRun.displayID("odd", version: 1))
+    }
+
     func testSummary() {
         XCTAssertEqual(makeRun().summary, "T00316 · N · roll A · 1-3")
     }

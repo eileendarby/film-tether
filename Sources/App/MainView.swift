@@ -45,7 +45,7 @@ struct MainView: View {
         // than accepting whatever the window currently offers; `.hidden` keeps
         // it invisible, and as a background it can't affect the real layout.
         .background(alignment: .topLeading) {
-            exposureBar(compact: true, stacked: true)
+            exposureBar(labelled: 0, stacked: true)
                 .fixedSize()
                 .background(WidthReporter { compactBarWidth = $0 })
                 .hidden()
@@ -104,11 +104,27 @@ struct MainView: View {
                 // minLength 0 fills the same space while leaving the bar's own
                 // minimum intact to propagate up as the window minimum.
                 HStack(spacing: 0) {
+                    // Widest first: every toggle labelled, then one fewer, and
+                    // so on down to icons only — so labels return one button at
+                    // a time as room allows, left to right, on a single row.
                     ViewThatFits(in: .horizontal) {
-                        exposureBar(compact: false)
-                        exposureBar(compact: true)
-                        exposureBar(compact: true, stacked: true)
+                        exposureBar(labelled: 9)
+                        exposureBar(labelled: 8)
+                        exposureBar(labelled: 7)
+                        exposureBar(labelled: 6)
+                        exposureBar(labelled: 5)
+                        exposureBar(labelled: 4)
+                        exposureBar(labelled: 3)
+                        exposureBar(labelled: 2)
+                        exposureBar(labelled: 1)
+                        exposureBar(labelled: 0)
+                        exposureBar(labelled: 0, stacked: true)
                     }
+                    // Sized before the Spacer, with the whole width on offer.
+                    // Without this the stack splits the room between the two
+                    // and asks the bar whether it fits in half — so the full
+                    // layout was never chosen however wide the window.
+                    .layoutPriority(1)
                     Spacer(minLength: 0)
                 }
                 .fixedSize(horizontal: false, vertical: true)
@@ -130,8 +146,8 @@ struct MainView: View {
 
     /// One layout variant of the toolbar. Padding lives inside so ViewThatFits
     /// measures the real footprint, not the bare content.
-    private func exposureBar(compact: Bool, stacked: Bool = false) -> some View {
-        ExposureBar(compact: compact, stacked: stacked)
+    private func exposureBar(labelled: Int, stacked: Bool = false) -> some View {
+        ExposureBar(labelled: labelled, stacked: stacked)
             .padding(.leading, 16)
             .padding(.trailing, 24)   // last button isn't flush to the window edge
             .padding(.vertical, 10)

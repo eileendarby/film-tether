@@ -11,7 +11,17 @@ struct ExposureBar: View {
     /// and zoom keep their text at every size — they're the controls you reach
     /// for constantly, and the last two double as state readouts whose value
     /// (the angle, the percentage) can't be shown by an icon at all.
-    var compact: Bool = false
+    /// How many of the toggles carry a label, counted left to right; the rest
+    /// are icons. MainView tries every count from all down to none and keeps
+    /// the largest that fits, so labels come back one button at a time as the
+    /// window widens, and the row never gives up its single line. Beyond the
+    /// last toggle, the manual-focus stepper unfolds from its menu.
+    var labelled: Int = ExposureBar.expandable
+
+    static let toggleCount = 8
+    static let expandable = toggleCount + 1
+
+    private func labelled(_ slot: Int) -> Bool { slot < labelled }
 
     /// Two rows, for a window too narrow even for the icons-only bar: the
     /// pickers on one line, the buttons on the next. This is the narrowest
@@ -88,7 +98,7 @@ struct ExposureBar: View {
         Button {
             model.showArchiveTray.toggle()
         } label: {
-            adaptiveLabel(
+            adaptiveLabel(slot: 7, 
                 model.showArchiveTray ? "Archive ON" : "Archive OFF",
                 systemImage: model.showArchiveTray ? "sidebar.trailing" : "sidebar.trailing",
                 width: 96
@@ -106,9 +116,9 @@ struct ExposureBar: View {
     /// the text is gone.
     @ViewBuilder
     private func adaptiveLabel(
-        _ title: String, systemImage: String, width: CGFloat
+        slot: Int, _ title: String, systemImage: String, width: CGFloat
     ) -> some View {
-        if compact {
+        if !labelled(slot) {
             Label(title, systemImage: systemImage)
                 .labelStyle(.iconOnly)
         } else {
@@ -152,7 +162,7 @@ struct ExposureBar: View {
         Button {
             model.toggleInvert()
         } label: {
-            adaptiveLabel(inverted ? "Positive" : "Negative",
+            adaptiveLabel(slot: 0, inverted ? "Positive" : "Negative",
                           systemImage: inverted ? "circle.righthalf.filled.inverse" : "film",
                           width: 82)
         }
@@ -167,7 +177,7 @@ struct ExposureBar: View {
         Button {
             model.toggleMonochrome()
         } label: {
-            adaptiveLabel(mono ? "B&W" : "Color",
+            adaptiveLabel(slot: 1, mono ? "B&W" : "Color",
                           systemImage: mono ? "circle.lefthalf.filled" : "paintpalette",
                           width: 62)
         }
@@ -184,7 +194,7 @@ struct ExposureBar: View {
         Button {
             model.toggleWhiteBalancePicker()
         } label: {
-            adaptiveLabel(
+            adaptiveLabel(slot: 2, 
                 armed ? "Pick…" : (isSet ? "WB set" : "WB"),
                 systemImage: armed ? "eyedropper.halffull" : "eyedropper",
                 width: 68
@@ -206,7 +216,7 @@ struct ExposureBar: View {
         Button {
             model.runAutoCrop()
         } label: {
-            adaptiveLabel("Auto-Crop", systemImage: "crop", width: 96)
+            adaptiveLabel(slot: 3, "Auto-Crop", systemImage: "crop", width: 96)
         }
         .help("Find the negative under the lens and put an adjustable crop box on it. Pressing it again re-detects from scratch. Uses the film format from the last confirmed crop to check the result, and to build one if detection can't be trusted.")
         .disabled(!model.isLiveViewOn || model.previewZoom != .fit)
@@ -220,7 +230,7 @@ struct ExposureBar: View {
         Button {
             if editing { model.applyCrop() } else { model.editCrop() }
         } label: {
-            adaptiveLabel(editing ? "Crop ON" : "Crop OFF",
+            adaptiveLabel(slot: 4, editing ? "Crop ON" : "Crop OFF",
                           systemImage: editing ? "crop.rotate" : "rectangle.dashed",
                           width: 90)
         }
@@ -235,7 +245,7 @@ struct ExposureBar: View {
         Button {
             model.showMeteringOverlay.toggle()
         } label: {
-            adaptiveLabel(
+            adaptiveLabel(slot: 6, 
                 model.showMeteringOverlay ? "Box ON" : "Box OFF",
                 systemImage: model.showMeteringOverlay ? "plus.viewfinder" : "viewfinder",
                 width: 74
@@ -250,7 +260,7 @@ struct ExposureBar: View {
         Button {
             model.focusPeakingEnabled.toggle()
         } label: {
-            adaptiveLabel(
+            adaptiveLabel(slot: 5, 
                 model.focusPeakingEnabled ? "Peaking ON" : "Peaking OFF",
                 systemImage: model.focusPeakingEnabled ? "scope" : "circle.dotted",
                 width: 102
@@ -455,10 +465,10 @@ struct ExposureBar: View {
     /// focus is set once and left, so the compact bar folds them away. The
     /// keys (, and . with Option/Control) work either way.
     private func focusGroup() -> some View {
-        if compact {
-            focusMenu()
-        } else {
+        if labelled > Self.toggleCount {
             focusStepper()
+        } else {
+            focusMenu()
         }
     }
 

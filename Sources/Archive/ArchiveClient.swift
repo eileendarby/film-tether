@@ -174,11 +174,11 @@ public actor ArchiveClient {
     }
 
     /// Every canonical asset of one type, following the pages.
-    public func allAssets(show: String, type: String) async throws -> [ArchiveAsset] {
+    public func allAssets(show: String, type: String, allVersions: Bool = false) async throws -> [ArchiveAsset] {
         var all: [ArchiveAsset] = []
         var page = 1
         while true {
-            let p = try await assets(show: show, type: type, page: page, perpage: 200)
+            let p = try await assets(show: show, type: type, page: page, perpage: 200, allVersions: allVersions)
             all.append(contentsOf: p.assets)
             let total = p.total ?? all.count
             if p.assets.isEmpty || all.count >= total || page > 50 { break }
@@ -256,21 +256,26 @@ public actor ArchiveClient {
     /// `original`. The asset is named by its middle part (`NA0012`), the
     /// show being in the path. "Not made yet" is a 404 whose message says so,
     /// distinct from an asset that doesn't exist.
-    public func image(show: String, asset: String, kind: String) async throws -> Data {
-        try await download("shows/\(show)/assets/\(asset)/images/\(kind)")
+    ///
+    /// Derivatives are served cacheable for a day, on the promise that an
+    /// image at an assetid and version never changes. An overwrite breaks
+    /// that promise on purpose; pass `fresh` to go past the local cache.
+    public func image(show: String, asset: String, kind: String, fresh: Bool = false) async throws -> Data {
+        try await download("shows/\(show)/assets/\(asset)/images/\(kind)", fresh: fresh)
     }
 
     /// GET raw bytes with the same token handling as `send`.
-    private func download(_ path: String, retryOn401: Bool = true) async throws -> Data {
+    private func download(_ path: String, fresh: Bool = false, retryOn401: Bool = true) async throws -> Data {
         var request = try makeRequest("GET", path, query: [])
         request.setValue("*/*", forHTTPHeaderField: "Accept")
+        if fresh { request.cachePolicy = .reloadIgnoringLocalCacheData }
         if accessToken == nil { try await refresh() }
         guard let token = accessToken else { throw ArchiveError.unauthenticated }
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         let (data, response) = try await perform(request)
         if response.statusCode == 401, retryOn401 {
             try await refresh()
-            return try await download(path, retryOn401: false)
+            return try await download(path, fresh: fresh, retryOn401: false)
         }
         guard (200..<300).contains(response.statusCode) else {
             let message = (try? decoder.decode(ErrorBody.self, from: data))?.error

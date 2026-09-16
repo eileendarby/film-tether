@@ -16,6 +16,15 @@ struct StatusFooter: View {
     var body: some View {
         HStack(spacing: 16) {
             connectionBadge()
+            // The body's own name, as it reports it — "Canon EOS R5m2" — so
+            // there is no doubt which camera the settings and the archive's
+            // record refer to. Blank until the body has been read.
+            if let body = model.snapshot.cameraModel, !body.isEmpty {
+                Text(body)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help(model.snapshot.lensName.map { "\(body) with \($0)" } ?? body)
+            }
             Text(model.snapshot.modeLabel)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -145,8 +154,12 @@ struct StatusFooter: View {
             // Clicking it opens the Settings tab where both halves are set.
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 Button {
-                    model.settingsTab = .capture
-                    openSettings()
+                    if model.archive.destinationLabel != nil {
+                        model.showArchiveTray = true
+                    } else {
+                        model.settingsTab = .capture
+                        openSettings()
+                    }
                 } label: {
                     Text("Destination: \(nextCapturePath(at: context.date))")
                         .font(.caption.monospacedDigit())
@@ -155,7 +168,9 @@ struct StatusFooter: View {
                         .truncationMode(.middle)
                 }
                 .buttonStyle(.plain)
-                .help("The folder and name the next capture will be saved with. Click to change either in Settings → Capture.")
+                .help(model.archive.destinationLabel != nil
+                      ? "Signed in to the archive: captures are sent there and the local copy is removed once filed. Click to open the tray."
+                      : "The folder and name the next capture will be saved with. Click to change either in Settings → Capture.")
             }
         }
     }
@@ -165,6 +180,12 @@ struct StatusFooter: View {
     /// extension comes from the last file the camera produced this session;
     /// before any capture the `{ext}` token is shown as-is rather than guessed.
     private func nextCapturePath(at date: Date) -> String {
+        // Signed in, the archive is where captures end up: say so, with the
+        // name the next one will be filed under when a row is hot.
+        if let api = model.archive.destinationLabel {
+            if let id = model.archive.run?.currentDisplayID { return "\(api) → \(id)" }
+            return api
+        }
         let ext = model.lastCapture.map { ($0 as NSString).pathExtension }
         let name = CameraCapture.resolveFilename(
             pattern: settings.filenamePattern, timestamp: date,
