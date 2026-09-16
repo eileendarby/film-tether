@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import QuickLookThumbnailing
 import Archive
 import Scan
@@ -563,6 +564,15 @@ final class ArchiveModel: ObservableObject {
     /// station usually isn't, and is told so).
     func removeCurrent() async {
         guard var r = run, let label = r.currentLabel, let padded = r.currentPadded, let assetID = r.currentAssetID else { return }
+        // A removal reaches the archive, so it asks first. Cancel is the
+        // default: a stray Return can't delete anything.
+        let alert = NSAlert()
+        alert.messageText = "Remove \(padded) from this row?"
+        alert.informativeText = "\(assetID) leaves the row, and its original scan and every derivative are deleted from the archive. This cannot be undone."
+        alert.alertStyle = .critical
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Remove")
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
         var kept: String? = nil
         if let client, let name = ArchiveAsset.pathName(ofAssetID: assetID) {
             var ids = [assetID]

@@ -279,7 +279,9 @@ the work. Add Assets and Scanning replace each other in the fourth slot.
   20)"), and *Next* starts at the first frame the archive lacks. The next
   frame, large, with its asset id; *Remove* for a negative that doesn't
   exist (the strip was miscounted): the asset leaves the row, and the
-  archive too where the station may delete — a 403 is explained, not hidden;
+  archive too where the station may delete — a 403 is explained, not hidden.
+  It asks first — the original and every derivative are deleted, and it
+  cannot be undone — with Cancel the default;
   a bar down the left in the capture button's blue on a lighter tinted ground,
   so the row every capture is going to is the one thing in the tray that
   isn't grey. The inventory row it belongs to wears the same bar and tint;
