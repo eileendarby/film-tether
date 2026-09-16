@@ -264,7 +264,8 @@ the work. Add Assets and Scanning replace each other in the fourth slot.
   archive has: green when every frame has a scan filed, red when none has,
   yellow in between (read from each asset's `image` block, refreshed when a
   send completes); the tooltip gives the count. Clicking a row makes it hot: captures
-  go to it from its first frame. (Everything in it is registered already, so
+  go to it from its first frame; clicking the hot row again finishes with
+  it, as *Finish* does. (Everything in it is registered already, so
   nothing is created.)
 - **Add Assets.** Type (from the server's type table), format (the film
   sizes by their database ids, 120mm Rollei by default), roll letter, first and last number. *Add

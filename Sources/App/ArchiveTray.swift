@@ -392,7 +392,8 @@ struct ArchiveTray: View {
     private func inventoryRow(_ type: InventoryType, _ range: InventoryRange) -> some View {
         let hot = isHot(type, range)
         return Button {
-            Task { await archive.start(type: type, range: range) }
+            // The hot row again: done with it for now, same as Finish.
+            if hot { archive.finish() } else { Task { await archive.start(type: type, range: range) } }
         } label: {
             HStack(spacing: 0) {
                 // The hot row wears the capture button's colour down its left
@@ -420,7 +421,7 @@ struct ArchiveTray: View {
         }
         .buttonStyle(.plain)
         .disabled(archive.isBusy)
-        .help(coverageText(type, range) + (hot ? " Captures are going to these assets."
+        .help(coverageText(type, range) + (hot ? " Captures are going to these assets. Click again to finish with them for now."
                   : " Click to scan them: every capture goes to them, starting at \(range.range.split(separator: "-").first.map(String.init) ?? range.range)."))
     }
 
