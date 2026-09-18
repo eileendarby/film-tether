@@ -2,6 +2,18 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-09-18 — Which scanner this is
+
+A new *Scanner* section under *Archive API*: the machines the archive knows
+(`GET /v1/scanners`), fetched at startup and after sign-in, in a picker —
+the row flagged `unknown` left out, since the archive refuses it as it
+refuses none at all — the heading wears the red star of a required field.
+The choice is remembered by the archive's id, dropped
+if the archive no longer offers it, and sent as `scanner` with every
+transfer registration; a run can't start until one is chosen. A send that
+was refused for naming no scanner goes again with the current choice on
+*Retry*.
+
 ## 2026-09-15 — The preview flops before it turns, as the archive does
 
 The preview mirrored after the quarter turn; the archive mirrors before it.

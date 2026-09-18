@@ -116,6 +116,15 @@ public actor ArchiveClient {
         let _: Empty = try await send("DELETE", "auth/sessions/\(id)")
     }
 
+    // MARK: - Scanners
+
+    /// The machines the archive knows, the `unknown` placeholder included —
+    /// callers filter with `isEligible`.
+    public func scanners() async throws -> [ArchiveScanner] {
+        let r: ScannersResponse = try await send("GET", "scanners")
+        return r.scanners
+    }
+
     // MARK: - Shows
 
     private struct CreateShowRequest: Encodable {
@@ -223,14 +232,17 @@ public actor ArchiveClient {
         var sha256: String
         var chunks: [String]
         var attributes: CaptureAttributes?
+        /// Which machine made the scan. Required by the archive: a transfer
+        /// without one is a 422 before a byte moves.
+        var scanner: Int?
     }
 
     /// Register a transfer and get the block list back. Nothing has moved yet.
     public func createUpload(assetID: String, filename: String, file: ChunkedFile,
-                             attributes: CaptureAttributes? = nil) async throws -> ArchiveUpload {
+                             attributes: CaptureAttributes? = nil, scanner: Int? = nil) async throws -> ArchiveUpload {
         try await send("POST", "uploads", body: CreateUploadRequest(
             assetid: assetID, filename: filename, bytes: file.bytes, chunkSize: file.chunkSize,
-            sha256: file.sha256, chunks: file.chunks, attributes: attributes
+            sha256: file.sha256, chunks: file.chunks, attributes: attributes, scanner: scanner
         ))
     }
 

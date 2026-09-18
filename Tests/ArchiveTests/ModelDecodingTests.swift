@@ -131,6 +131,15 @@ final class ModelDecodingTests: XCTestCase {
         XCTAssertEqual(u.remaining, 60)
     }
 
+    func testScanners() throws {
+        let wrapped = try decoder.decode(ScannersResponse.self, from: Data(#"{ "scanners": [ { "id": 1, "name": "Downshooter", "unknown": false }, { "id": 0, "name": "unknown", "unknown": true } ] }"#.utf8))
+        XCTAssertEqual(wrapped.scanners.map(\.id), [1, 0])
+        XCTAssertEqual(wrapped.scanners.filter(\.isEligible).map(\.name), ["Downshooter"], "the unknown row is never offered")
+        let bare = try decoder.decode(ScannersResponse.self, from: Data(#"[ { "id": 2, "name": "Flatbed" } ]"#.utf8))
+        XCTAssertEqual(bare.scanners.first?.name, "Flatbed")
+        XCTAssertTrue(bare.scanners[0].isEligible, "no flag means eligible")
+    }
+
     func testLoginAndRefresh() throws {
         let login = try decoder.decode(LoginResponse.self, from: Data("""
         { "access_token": "v1.1.x", "expires_in": 900, "refresh_token": "r", "session": 1, "device": "scanning station 2" }

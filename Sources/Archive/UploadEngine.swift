@@ -30,8 +30,12 @@ public struct UploadJob: Codable, Identifiable, Equatable, Sendable {
     /// What the operator did to the frame, sent with the scan. Optional so
     /// a queue saved before this existed still loads.
     public var attributes: CaptureAttributes?
+    /// The machine that made the scan, as the archive numbers it. Optional
+    /// only so an older saved queue decodes; a send without one is refused.
+    public var scanner: Int?
 
-    public init(assetID: String, fileURL: URL, show: String, label: String, attributes: CaptureAttributes? = nil) {
+    public init(assetID: String, fileURL: URL, show: String, label: String,
+                attributes: CaptureAttributes? = nil, scanner: Int? = nil) {
         id = UUID()
         self.assetID = assetID
         self.fileURL = fileURL
@@ -40,6 +44,7 @@ public struct UploadJob: Codable, Identifiable, Equatable, Sendable {
         state = .queued
         created = Date()
         self.attributes = attributes
+        self.scanner = scanner
     }
 
     /// Still to do, or in progress.
@@ -151,6 +156,12 @@ public actor UploadEngine {
         }
     }
 
+    /// Name the machine on a job that was queued before one was chosen, so
+    /// a retry can succeed.
+    public func setScanner(_ scanner: Int?, for id: UUID) {
+        update(id) { $0.scanner = scanner }
+    }
+
     /// Drop finished entries from the list.
     public func clearDone() {
         jobs.removeAll { $0.isDone }
@@ -245,7 +256,7 @@ public actor UploadEngine {
         }
         if upload == nil {
             upload = try await client.createUpload(assetID: job.assetID, filename: job.fileURL.lastPathComponent,
-                                                   file: file, attributes: job.attributes)
+                                                   file: file, attributes: job.attributes, scanner: job.scanner)
         }
         guard var current = upload else { throw ArchiveError.badResponse }
         let total = current.chunks ?? file.chunkCount

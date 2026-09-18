@@ -43,6 +43,41 @@ struct SessionsResponse: Codable {
     var sessions: [ArchiveSession]
 }
 
+// MARK: - Scanners
+
+/// A scanning machine the archive knows. Every transfer names one; the row
+/// flagged `unknown` is the placeholder for "nobody wrote it down", which the
+/// API refuses exactly as it refuses none at all, so it is never offered.
+public struct ArchiveScanner: Codable, Equatable, Identifiable, Sendable {
+    public var id: Int
+    public var name: String
+    public var unknown: Bool?
+
+    public init(id: Int, name: String, unknown: Bool? = nil) {
+        self.id = id
+        self.name = name
+        self.unknown = unknown
+    }
+
+    public var isEligible: Bool { unknown != true }
+}
+
+/// `{ "scanners": [ … ] }` as the other lists are shaped, or a bare array.
+struct ScannersResponse: Decodable {
+    var scanners: [ArchiveScanner]
+
+    init(from decoder: Decoder) throws {
+        if let keyed = try? decoder.container(keyedBy: CodingKeys.self),
+           let list = try? keyed.decode([ArchiveScanner].self, forKey: .scanners) {
+            scanners = list
+        } else {
+            scanners = try decoder.singleValueContainer().decode([ArchiveScanner].self)
+        }
+    }
+
+    enum CodingKeys: String, CodingKey { case scanners }
+}
+
 // MARK: - Shows
 
 public struct ArchiveShow: Codable, Equatable, Identifiable, Sendable {

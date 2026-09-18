@@ -63,6 +63,7 @@ struct ArchiveTray: View {
                 feedback
                 section("Archive API") { archiveSection }
                 if archive.isSignedIn {
+                    section("Scanner", required: true) { scannerSection }
                     section("Active Show") { showSection }
                     if archive.currentShow != nil {
                         section("Show Inventory") { inventorySection }
@@ -84,10 +85,12 @@ struct ArchiveTray: View {
         }
     }
 
-    /// A prominent heading over a card.
-    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+    /// A prominent heading over a card. `required` adds a red star, the
+    /// usual mark for a field that must be filled.
+    private func section<Content: View>(_ title: String, required: Bool = false,
+                                        @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title)
+            (Text(title) + (required ? Text(" *").foregroundColor(.red) : Text("")))
                 .font(.title3.weight(.semibold))
             content()
                 .padding(10)
@@ -208,6 +211,32 @@ struct ArchiveTray: View {
                 }
             }
             if archive.isBusy {
+                ProgressView().controlSize(.small)
+            }
+        }
+    }
+
+    // MARK: Scanner
+
+    /// Which machine this is, from the archive's own list. Every transfer
+    /// names it; the archive refuses one that doesn't.
+    private var scannerSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Picker("", selection: $archive.selectedScanner) {
+                    Text("Choose…").tag(Int?.none)
+                    ForEach(archive.eligibleScanners) { s in
+                        Text(s.name).tag(Int?.some(s.id))
+                    }
+                }
+                .labelsHidden()
+                .help("The scanning machine this station is, as the archive knows it. Sent with every scan; the archive files each scan under it.")
+                Button { Task { await archive.loadScanners() } } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.plain)
+                    .disabled(archive.isLoadingScanners)
+                    .help("Reload the list of scanners from the archive")
+            }
+            if archive.isLoadingScanners {
                 ProgressView().controlSize(.small)
             }
         }

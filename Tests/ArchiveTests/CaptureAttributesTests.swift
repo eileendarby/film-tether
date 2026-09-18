@@ -119,6 +119,20 @@ final class CaptureAttributesTests: XCTestCase {
         XCTAssertEqual(u.id, 5)
     }
 
+    func testScannerRidesWithTheUpload() async throws {
+        MockURLProtocol.reset()
+        MockURLProtocol.handler = { req, body in
+            if Mock.path(req) == "/auth/refresh" {
+                return (200, Mock.json(#"{ "access_token": "A", "expires_in": 900 }"#))
+            }
+            XCTAssertEqual(Mock.jsonObject(body)["scanner"] as? Int, 3)
+            return (201, Mock.json(#"{ "id": 7, "state": "sending", "outstanding": [0], "outstanding_total": 1, "chunks": 1 }"#))
+        }
+        let file = ChunkedFile(url: URL(fileURLWithPath: "/x.cr3"), bytes: 10, chunkSize: 1024,
+                               sha256: String(repeating: "a", count: 64), chunks: [String(repeating: "b", count: 64)])
+        _ = try await Mock.client().createUpload(assetID: "T00316_NA0001_00", filename: "x.cr3", file: file, scanner: 3)
+    }
+
     func testNoAttributesMeansNoKey() async throws {
         MockURLProtocol.reset()
         MockURLProtocol.handler = { req, body in

@@ -33,6 +33,7 @@ final class ArchiveModel: ObservableObject {
         static let baseURL = "archiveBaseURL"
         static let login = "archiveLogin"
         static let device = "archiveDevice"
+        static let scanner = "archiveScanner"
     }
 
     // MARK: - Archive API
@@ -49,6 +50,20 @@ final class ArchiveModel: ObservableObject {
     @Published private(set) var errorMessage: String?
     /// Transient confirmation, cleared after a few seconds.
     @Published private(set) var status: String?
+
+    // MARK: - Scanner
+
+    /// The machines the archive knows, as fetched; the picker shows the
+    /// eligible ones.
+    @Published private(set) var scanners: [ArchiveScanner] = []
+    @Published private(set) var isLoadingScanners = false
+    /// The machine this station is, by the archive's id. Remembered; sent
+    /// with every transfer; nothing is scanned to the archive without it.
+    @Published var selectedScanner: Int? {
+        didSet {
+            if let id = selectedScanner { defaults.set(id, forKey: Key.scanner) } else { defaults.removeObject(forKey: Key.scanner) }
+        }
+    }
 
     // MARK: - Active show
 
@@ -153,6 +168,7 @@ final class ArchiveModel: ObservableObject {
         // 120mm Rollei, the archive's id 2: most of what gets scanned. Not the
         // auto-crop's expected size, which follows whatever is under the lens.
         formFormatID = 2
+        selectedScanner = defaults.object(forKey: Key.scanner) as? Int
         restoreState()
         if let creds = tokenStore.load(), let url = try? ArchiveClient.parseBaseURL(creds.baseURL) {
             baseURLText = creds.baseURL
@@ -161,6 +177,7 @@ final class ArchiveModel: ObservableObject {
             session = creds.session
             connect(url: url, refreshToken: creds.refreshToken)
             auth = .signedIn
+            Task { await loadScanners() }
             if let id = persistedShowID {
                 Task { await reloadShow(id: id) }
             }
@@ -219,6 +236,7 @@ final class ArchiveModel: ObservableObject {
             auth = .signedIn
             flash("Signed in as \(login)")
             await engine?.resume()
+            await loadScanners()
             if currentShow == nil, let id = persistedShowID { await reloadShow(id: id) }
         }
     }
@@ -240,6 +258,29 @@ final class ArchiveModel: ObservableObject {
     func cancelCode() {
         auth = .signedOut
         code = ""
+    }
+
+    /// Ask the archive which machines it knows. A remembered choice that is
+    /// no longer offered — gone, or flagged unknown — is dropped, so a stale
+    /// id can't be sent.
+    func loadScanners() async {
+        guard let client else { return }
+        isLoadingScanners = true
+        defer { isLoadingScanners = false }
+        do {
+            scanners = try await client.scanners()
+            if let id = selectedScanner, !eligibleScanners.contains(where: { $0.id == id }) {
+                selectedScanner = nil
+            }
+        } catch {
+            report(error)
+        }
+    }
+
+    var eligibleScanners: [ArchiveScanner] { scanners.filter(\.isEligible) }
+
+    var selectedScannerName: String? {
+        selectedScanner.flatMap { id in scanners.first { $0.id == id }?.name }
     }
 
     // MARK: - Active show
@@ -447,6 +488,10 @@ final class ArchiveModel: ObservableObject {
     /// from its first frame. Everything in it is registered already, so the
     /// asset ids are looked up, not created.
     func start(type: InventoryType, range: InventoryRange) async {
+        guard selectedScanner != nil else {
+            errorMessage = "Choose which scanner this is first — the archive files every scan under one"
+            return
+        }
         guard let p = parameters(of: type, range) else {
             errorMessage = "Can't step through \(range.range)"
             return
@@ -712,6 +757,8 @@ final class ArchiveModel: ObservableObject {
     }
 
     private func enqueue(_ job: UploadJob) {
+        var job = job
+        job.scanner = selectedScanner
         if let engine {
             Task { await engine.enqueue(job) }
         } else {
@@ -723,7 +770,13 @@ final class ArchiveModel: ObservableObject {
     // MARK: - Queue
 
     func retry(_ job: UploadJob) {
-        Task { await engine?.retry(job.id) }
+        // A send queued before a scanner was chosen, or refused for naming
+        // none, goes again with the current choice.
+        let scanner = selectedScanner
+        Task {
+            await engine?.setScanner(scanner, for: job.id)
+            await engine?.retry(job.id)
+        }
     }
 
     func remove(_ job: UploadJob) {
