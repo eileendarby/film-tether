@@ -34,6 +34,7 @@ final class ArchiveModel: ObservableObject {
         static let login = "archiveLogin"
         static let device = "archiveDevice"
         static let scanner = "archiveScanner"
+        static let inventoryRolledUp = "archiveInventoryRolledUp"
     }
 
     // MARK: - Archive API
@@ -169,6 +170,7 @@ final class ArchiveModel: ObservableObject {
         // auto-crop's expected size, which follows whatever is under the lens.
         formFormatID = 2
         selectedScanner = defaults.object(forKey: Key.scanner) as? Int
+        inventoryRolledUp = defaults.dictionary(forKey: Key.inventoryRolledUp) as? [String: Bool] ?? [:]
         restoreState()
         if let creds = tokenStore.load(), let url = try? ArchiveClient.parseBaseURL(creds.baseURL) {
             baseURLText = creds.baseURL
@@ -278,6 +280,25 @@ final class ArchiveModel: ObservableObject {
     }
 
     var eligibleScanners: [ArchiveScanner] { scanners.filter(\.isEligible) }
+
+    // MARK: - Inventory categories rolled up
+
+    /// Type letter → rolled up. Remembered. A category with no remembered
+    /// state starts rolled up if it's one of the rarely-scanned kinds —
+    /// envelopes and onion skins — so the negatives stay in view.
+    @Published private(set) var inventoryRolledUp: [String: Bool] = [:] {
+        didSet { defaults.set(inventoryRolledUp, forKey: Key.inventoryRolledUp) }
+    }
+
+    func isRolledUp(_ type: InventoryType) -> Bool {
+        if let stored = inventoryRolledUp[type.type] { return stored }
+        let name = type.displayName.lowercased()
+        return name.contains("envelope") || name.contains("onion")
+    }
+
+    func toggleRolledUp(_ type: InventoryType) {
+        inventoryRolledUp[type.type] = !isRolledUp(type)
+    }
 
     var selectedScannerName: String? {
         selectedScanner.flatMap { id in scanners.first { $0.id == id }?.name }

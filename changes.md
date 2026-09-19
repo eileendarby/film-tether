@@ -2,6 +2,13 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-09-19 — Inventory categories roll up
+
+Each category in the inventory has a caret: click it to roll the category
+up, so the rows you're working through stay in view. A rolled-up category
+shows its row count. The state is remembered per category; Envelopes and
+Onion Skins start rolled up.
+
 ## 2026-09-18 — Which scanner this is
 
 A new *Scanner* section under *Archive API*: the machines the archive knows

@@ -407,11 +407,31 @@ struct ArchiveTray: View {
                         .padding(.vertical, 4)
                 }
                 ForEach(populated) { type in
-                    Text(type.displayName)
-                        .font(.caption.weight(.semibold))
+                    let rolledUp = archive.isRolledUp(type)
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) { archive.toggleRolledUp(type) }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: rolledUp ? "chevron.right" : "chevron.down")
+                                .font(.caption2.weight(.semibold))
+                                .frame(width: 10)
+                            Text(type.displayName)
+                                .font(.caption.weight(.semibold))
+                            if rolledUp {
+                                Text("\(type.ranges.count)")
+                                    .font(.caption2)
+                            }
+                            Spacer(minLength: 0)
+                        }
                         .foregroundStyle(.secondary)
-                    ForEach(type.ranges, id: \.self) { range in
-                        inventoryRow(type, range)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(rolledUp ? "Show the \(type.displayName.lowercased()) rows" : "Roll up the \(type.displayName.lowercased()) rows to focus on the rest")
+                    if !rolledUp {
+                        ForEach(type.ranges, id: \.self) { range in
+                            inventoryRow(type, range)
+                        }
                     }
                 }
             }
