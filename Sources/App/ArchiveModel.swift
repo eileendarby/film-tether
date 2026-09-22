@@ -756,7 +756,10 @@ final class ArchiveModel: ObservableObject {
     /// it is about to be wrong. Drop it, and remember to fetch the new one
     /// past the cache once the archive has rendered it.
     private func forgetDerivative(of assetID: String) {
-        guard scannedAssetIDs.contains(assetID) || thumbnails[assetID]?.source == .archive else { return }
+        // Unconditional. A new capture for this asset makes any picture we
+        // hold stale — the archive's derivative, or a local rendering of
+        // the *previous* file from earlier this session, which the old guard
+        // left in place because the archive's list hadn't caught up yet.
         thumbnails[assetID] = nil
         archiveTried[assetID] = nil
         overwritten.insert(assetID)
@@ -924,9 +927,9 @@ final class ArchiveModel: ObservableObject {
         guard path.hasPrefix(cache + "/"), FileManager.default.fileExists(atPath: path) else { return }
         Task { [weak self] in
             guard let self else { return }
-            if await self.thumbnails[job.assetID] == nil {
-                await self.loadThumbnail(assetID: job.assetID, show: job.show, tryArchive: false, localFile: job.fileURL)
-            }
+            // Always from *this* file: a rescan must show the new scan, not
+            // the picture of the one it replaced.
+            await self.renderLocal(assetID: job.assetID, from: job.fileURL)
             try? FileManager.default.removeItem(at: job.fileURL)
             archiveLog.info("removed cached \(job.fileURL.lastPathComponent, privacy: .public) after filing")
         }
@@ -999,7 +1002,7 @@ final class ArchiveModel: ObservableObject {
         let inArchive = (scannedFrames[run.type] ?? []).contains(Self.frameKey(roll: run.roll, label: frame.label))
             || jobs.contains { $0.assetID == id && $0.state == .rendered }
         let askedRecently = archiveTried[id].map { Date().timeIntervalSince($0) < 30 } ?? false
-        let wantArchive = inArchive && thumbnails[id]?.source != .archive && !askedRecently
+        let wantArchive = inArchive && (thumbnails[id]?.source != .archive || overwritten.contains(id)) && !askedRecently
         let wantLocal = thumbnails[id] == nil
         guard wantArchive || wantLocal, !thumbnailWork.contains(id) else { return }
         thumbnailWork.insert(id)
@@ -1014,7 +1017,9 @@ final class ArchiveModel: ObservableObject {
     /// the archive's, if one is showing.
     private func upgradeThumbnails(for rendered: [UploadJob]) {
         guard let run else { return }
-        for job in rendered where thumbnails[job.assetID]?.source == .local {
+        // Every rendered send, whatever picture is showing: after an
+        // overwrite the archive's previous derivative is the stale one.
+        for job in rendered {
             if let frame = frames(of: run).first(where: { $0.assetID == job.assetID }) {
                 archiveTried[job.assetID] = nil
                 requestThumbnail(for: frame, in: run)
@@ -1033,12 +1038,24 @@ final class ArchiveModel: ObservableObject {
         return candidates.first { ["jpg", "jpeg"].contains($0.pathExtension.lowercased()) } ?? candidates.first
     }
 
+    /// A local rendering of a file, replacing whatever is held.
+    private func renderLocal(assetID: String, from file: URL) async {
+        let request = QLThumbnailGenerator.Request(
+            fileAt: file, size: CGSize(width: 720, height: 720), scale: 2, representationTypes: .thumbnail
+        )
+        if let rep = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request) {
+            thumbnails[assetID] = Thumbnail(image: rep.nsImage, source: .local)
+        }
+    }
+
     private func loadThumbnail(assetID: String, show: String, tryArchive: Bool, localFile: URL?) async {
         defer { thumbnailWork.remove(assetID) }
         if tryArchive, let client, let name = ArchiveAsset.pathName(ofAssetID: assetID) {
             archiveTried[assetID] = Date()
-            let fresh = overwritten.contains(assetID)
-            if let data = try? await client.image(show: show, asset: name, kind: "thumbnail", fresh: fresh),
+            // Always past the local cache: derivatives are served cacheable
+            // for a day on the promise they never change, and a rescan is
+            // that promise broken. Thumbnails are small; correctness wins.
+            if let data = try? await client.image(show: show, asset: name, kind: "thumbnail", fresh: true),
                let image = NSImage(data: data) {
                 thumbnails[assetID] = Thumbnail(image: image, source: .archive)
                 overwritten.remove(assetID)

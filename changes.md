@@ -2,6 +2,19 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-09-21 — A rescan shows the rescan
+
+Scanning a frame again in the same session, with Overwrite, left the first
+scan's picture in the Scanned list. The picture is dropped only if the
+archive's asset list already showed the frame as filed, or if the picture
+was the archive's — and after a first scan earlier in the session it was
+the local rendering of the first file, with the list not yet re-read; so
+nothing was dropped, the new file was never rendered (that only happened
+when no picture existed) and the later upgrade skipped it. Now a new
+capture for an asset always drops the picture held, the new file is always
+rendered when its send is filed, every rendered send refreshes its picture,
+and the archive's thumbnail is always fetched past the local cache.
+
 ## 2026-09-19 — Inventory categories roll up
 
 Each category in the inventory has a caret: click it to roll the category
