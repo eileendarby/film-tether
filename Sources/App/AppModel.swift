@@ -517,8 +517,18 @@ final class AppModel: ObservableObject {
         let turned = previewOrientation.apply(raw) ?? raw
         let cg = FineRotation.rotate(turned, byDegrees: previewFineRotation) ?? turned
         guard let plan = CropPlanner.plan(in: cg, expecting: expectedFilmSize) else {
-            showNotice("No negative found — set the crop by hand, or check the framing")
-            appLog.info("auto-crop: no plan")
+            // Never a dead end: with nothing found, put a small box in the
+            // middle of the frame, editing, and let the operator pull it out
+            // to the negative. 100 × 100 of the frame's pixels, in display
+            // space, so it lands square in the centre of what's on screen.
+            let w = CGFloat(cg.width), h = CGFloat(cg.height)
+            let box = CGRect(x: 0.5 - 50 / w, y: 0.5 - 50 / h, width: 100 / w, height: 100 / h)
+            cropRect = CropBox.sanitised(box)
+            isCropEditing = true
+            appliedCrop = nil
+            cropSource = .manual
+            showNotice("No negative found — a box is in the centre; drag it out to the negative")
+            appLog.info("auto-crop: no plan, placed a starter box")
             return
         }
         cropRect = CropBox.sanitised(

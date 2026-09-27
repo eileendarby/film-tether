@@ -2,6 +2,13 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-09-26 — Auto-crop never ends in a dead end
+
+When the detector finds no negative it used to stop with "set the crop by
+hand" — and there was no such thing to do. Now it puts a 100 × 100 pixel
+box in the centre of the frame, in editing, and says so; the operator drags
+it out to the negative from there. Its source is recorded as manual.
+
 ## 2026-09-26 — Overwrite clears the picture at once; the raw scan shows on landing
 
 Rescanning with Overwrite still left the earlier picture in the Scanned
