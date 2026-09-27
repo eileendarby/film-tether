@@ -706,10 +706,16 @@ final class ArchiveModel: ObservableObject {
         attrs.crop?.format = r.format
         let sent = attrs.validated()
         let snapshot = r
+        // What to render for the list: the JPEG when there is one (faster),
+        // else the RAW. Shown as soon as the id is known — the raw scan,
+        // before the send has even started; the archive's derivative
+        // replaces it once rendered.
+        let preview = files.first { ["jpg", "jpeg"].contains($0.pathExtension.lowercased()) } ?? primary
         Task {
             if let id = await resolveAssetID(run: snapshot, label: label, version: version) {
                 forgetDerivative(of: id)
                 enqueue(UploadJob(assetID: id, fileURL: primary, show: snapshot.show, label: label, attributes: sent))
+                await renderLocal(assetID: id, from: preview)
             }
             for companion in files where companion != primary {
                 if let id = await resolveAssetID(run: snapshot, label: label, version: version + 1) {
@@ -762,6 +768,16 @@ final class ArchiveModel: ObservableObject {
         // left in place because the archive's list hadn't caught up yet.
         thumbnails[assetID] = nil
         archiveTried[assetID] = nil
+        overwritten.insert(assetID)
+    }
+
+    /// The operator chose Overwrite: the picture held for that name is gone,
+    /// now, as if the earlier scan had never been shown. The new one takes
+    /// its place when it lands.
+    func willOverwrite(_ assetID: String) {
+        thumbnails[assetID] = nil
+        archiveTried[assetID] = nil
+        thumbnailWork.remove(assetID)
         overwritten.insert(assetID)
     }
 

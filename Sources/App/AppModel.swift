@@ -1402,7 +1402,9 @@ final class AppModel: ObservableObject {
             case .alertSecondButtonReturn:
                 archive.stepVersion(1)
             case .alertThirdButtonReturn:
-                break
+                // Overwrite: the earlier scan's picture goes now, before the
+                // shutter, as if it had never been shown.
+                archive.willOverwrite(name)
             default:
                 appLog.info("captureNow: cancelled, \(name, privacy: .public) is taken")
                 return

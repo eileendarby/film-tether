@@ -2,6 +2,15 @@
 
 A dated log of code changes made to Film Tether. Newest first.
 
+## 2026-09-26 — Overwrite clears the picture at once; the raw scan shows on landing
+
+Rescanning with Overwrite still left the earlier picture in the Scanned
+list. The three moments are now explicit and independent of the send:
+choosing Overwrite clears the picture held for that name there and then,
+before the shutter; the new file is rendered and shown the moment the
+capture lands — the raw scan, before the send has started; and the
+archive's derivative replaces it, fetched past the cache, once rendered.
+
 ## 2026-09-21 — A rescan shows the rescan
 
 Scanning a frame again in the same session, with Overwrite, left the first
